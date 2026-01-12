@@ -1,0 +1,482 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   Aura 2026 Design System - Global Styles
+   ============================================ */
+
+@layer base {
+  /* Root Variables */
+  :root {
+    /* Aurora Color System */
+    --color-primary-50: #faf5ff;
+    --color-primary-100: #f3e8ff;
+    --color-primary-200: #e9d5ff;
+    --color-primary-300: #d8b4fe;
+    --color-primary-400: #c084fc;
+    --color-primary-500: #a855f7;
+    --color-primary-600: #9333ea;
+    --color-primary-700: #7e22ce;
+    --color-primary-800: #6b21a8;
+    --color-primary-900: #581c87;
+
+    /* Cyan Accent */
+    --color-cyan-400: #22d3ee;
+    --color-cyan-500: #06b6d4;
+
+    /* Pink Accent */
+    --color-pink-400: #f472b6;
+    --color-pink-500: #ec4899;
+
+    /* Dark Mode Backgrounds */
+    --bg-base: #030712;
+    --bg-elevated: #0f172a;
+    --bg-surface: #1e293b;
+
+    /* Glass Surfaces */
+    --glass-50: rgba(255, 255, 255, 0.02);
+    --glass-100: rgba(255, 255, 255, 0.04);
+    --glass-200: rgba(255, 255, 255, 0.06);
+    --glass-300: rgba(255, 255, 255, 0.08);
+    --glass-400: rgba(255, 255, 255, 0.12);
+
+    /* Borders */
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-default: rgba(255, 255, 255, 0.10);
+    --border-strong: rgba(255, 255, 255, 0.16);
+
+    /* Timing Functions */
+    --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+    --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* Durations */
+    --duration-instant: 100ms;
+    --duration-fast: 150ms;
+    --duration-normal: 200ms;
+    --duration-slow: 300ms;
+    --duration-slower: 500ms;
+  }
+}
+
+@layer components {
+  /* ============================================
+     Glass Card Components
+     ============================================ */
+
+  /* Standard Glass Card */
+  .glass-card {
+    background-color: rgba(255, 255, 255, 0.03);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.08);
+    border-radius: 24px;
+  }
+
+  /* Highlighted Glass Card with Aurora Gradient */
+  .glass-card-highlight {
+    background-color: rgba(168, 85, 247, 0.06);
+    border-width: 1px;
+    border-color: rgba(168, 85, 247, 0.2);
+    border-radius: 28px;
+  }
+
+  /* Inset Glass Effect */
+  .glass-inset {
+    background-color: rgba(0, 0, 0, 0.25);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.04);
+    border-radius: 16px;
+  }
+
+  /* ============================================
+     Button Variants
+     ============================================ */
+
+  /* Primary Gradient Button */
+  .btn-primary {
+    background-color: #9333ea;
+    border-radius: 16px;
+    padding-vertical: 16px;
+    padding-horizontal: 24px;
+  }
+
+  .btn-primary-lg {
+    background-color: #9333ea;
+    border-radius: 18px;
+    padding-vertical: 18px;
+    padding-horizontal: 32px;
+  }
+
+  /* Secondary Glass Button */
+  .btn-secondary {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding-vertical: 16px;
+    padding-horizontal: 24px;
+  }
+
+  /* Ghost Button */
+  .btn-ghost {
+    background-color: transparent;
+    border-radius: 16px;
+    padding-vertical: 16px;
+    padding-horizontal: 24px;
+  }
+
+  /* Success Button */
+  .btn-success {
+    background-color: #10b981;
+    border-radius: 16px;
+    padding-vertical: 16px;
+    padding-horizontal: 24px;
+  }
+
+  /* Danger Button */
+  .btn-danger {
+    background-color: #ef4444;
+    border-radius: 16px;
+    padding-vertical: 16px;
+    padding-horizontal: 24px;
+  }
+
+  /* ============================================
+     Input Components
+     ============================================ */
+
+  /* Standard Input */
+  .input-standard {
+    background-color: rgba(0, 0, 0, 0.3);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding-vertical: 16px;
+    padding-horizontal: 16px;
+    color: #f8fafc;
+    font-size: 16px;
+  }
+
+  /* Focused Input */
+  .input-focused {
+    border-color: rgba(168, 85, 247, 0.5);
+    background-color: rgba(168, 85, 247, 0.05);
+  }
+
+  /* ============================================
+     Status Indicators
+     ============================================ */
+
+  /* Active Status Dot */
+  .status-active {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background-color: #10b981;
+  }
+
+  /* Warning Status Dot */
+  .status-warning {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background-color: #f59e0b;
+  }
+
+  /* Error Status Dot */
+  .status-error {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background-color: #ef4444;
+  }
+
+  /* ============================================
+     Avatar Components
+     ============================================ */
+
+  /* Standard Avatar */
+  .avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 24px;
+    background-color: rgba(168, 85, 247, 0.2);
+    border-width: 2px;
+    border-color: rgba(168, 85, 247, 0.3);
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Large Avatar */
+  .avatar-lg {
+    width: 64px;
+    height: 64px;
+    border-radius: 32px;
+    background-color: rgba(168, 85, 247, 0.2);
+    border-width: 2px;
+    border-color: rgba(168, 85, 247, 0.3);
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ============================================
+     Badge Components
+     ============================================ */
+
+  /* Primary Badge */
+  .badge-primary {
+    background-color: rgba(168, 85, 247, 0.2);
+    border-radius: 12px;
+    padding-vertical: 6px;
+    padding-horizontal: 12px;
+  }
+
+  /* Success Badge */
+  .badge-success {
+    background-color: rgba(16, 185, 129, 0.2);
+    border-radius: 12px;
+    padding-vertical: 6px;
+    padding-horizontal: 12px;
+  }
+
+  /* Warning Badge */
+  .badge-warning {
+    background-color: rgba(245, 158, 11, 0.2);
+    border-radius: 12px;
+    padding-vertical: 6px;
+    padding-horizontal: 12px;
+  }
+
+  /* Error Badge */
+  .badge-error {
+    background-color: rgba(239, 68, 68, 0.2);
+    border-radius: 12px;
+    padding-vertical: 6px;
+    padding-horizontal: 12px;
+  }
+
+  /* ============================================
+     Progress Components
+     ============================================ */
+
+  /* Progress Bar Track */
+  .progress-track {
+    height: 8px;
+    background-color: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  /* Progress Bar Fill */
+  .progress-fill {
+    height: 8px;
+    background-color: #a855f7;
+    border-radius: 4px;
+  }
+
+  /* Progress Bar Success */
+  .progress-fill-success {
+    height: 8px;
+    background-color: #10b981;
+    border-radius: 4px;
+  }
+
+  /* ============================================
+     Divider Components
+     ============================================ */
+
+  /* Horizontal Divider */
+  .divider {
+    height: 1px;
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+
+  /* Vertical Divider */
+  .divider-vertical {
+    width: 1px;
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+
+  /* ============================================
+     Menu Item Components
+     ============================================ */
+
+  /* Menu Item */
+  .menu-item {
+    flex-direction: row;
+    align-items: center;
+    padding-vertical: 16px;
+    padding-horizontal: 16px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border-radius: 16px;
+    margin-bottom: 8px;
+  }
+
+  /* Menu Item Icon Container */
+  .menu-item-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    background-color: rgba(168, 85, 247, 0.15);
+    align-items: center;
+    justify-content: center;
+    margin-right: 16px;
+  }
+
+  /* ============================================
+     Info Card Components
+     ============================================ */
+
+  /* Info Card */
+  .info-card {
+    flex-direction: row;
+    align-items: center;
+    padding: 16px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+  }
+
+  /* Stat Card */
+  .stat-card {
+    flex: 1;
+    padding: 20px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+  }
+
+  /* ============================================
+     Alert/Banner Components
+     ============================================ */
+
+  /* Warning Banner */
+  .banner-warning {
+    flex-direction: row;
+    align-items: center;
+    padding: 16px;
+    background-color: rgba(245, 158, 11, 0.1);
+    border-width: 1px;
+    border-color: rgba(245, 158, 11, 0.25);
+    border-radius: 16px;
+  }
+
+  /* Success Banner */
+  .banner-success {
+    flex-direction: row;
+    align-items: center;
+    padding: 16px;
+    background-color: rgba(16, 185, 129, 0.1);
+    border-width: 1px;
+    border-color: rgba(16, 185, 129, 0.25);
+    border-radius: 16px;
+  }
+
+  /* Error Banner */
+  .banner-error {
+    flex-direction: row;
+    align-items: center;
+    padding: 16px;
+    background-color: rgba(239, 68, 68, 0.1);
+    border-width: 1px;
+    border-color: rgba(239, 68, 68, 0.25);
+    border-radius: 16px;
+  }
+
+  /* Info Banner */
+  .banner-info {
+    flex-direction: row;
+    align-items: center;
+    padding: 16px;
+    background-color: rgba(168, 85, 247, 0.1);
+    border-width: 1px;
+    border-color: rgba(168, 85, 247, 0.25);
+    border-radius: 16px;
+  }
+}
+
+@layer utilities {
+  /* ============================================
+     Text Utilities
+     ============================================ */
+
+  .text-gradient-primary {
+    color: #c084fc;
+  }
+
+  .text-glow {
+    text-shadow: 0 0 20px rgba(168, 85, 247, 0.5);
+  }
+
+  /* ============================================
+     Background Utilities
+     ============================================ */
+
+  /* Aurora Background */
+  .bg-aurora {
+    background-color: #030712;
+  }
+
+  /* Elevated Surface */
+  .bg-elevated {
+    background-color: #0f172a;
+  }
+
+  /* Surface */
+  .bg-surface {
+    background-color: #1e293b;
+  }
+
+  /* ============================================
+     Border Utilities
+     ============================================ */
+
+  .border-glass {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .border-glass-strong {
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+
+  .border-primary-glow {
+    border-color: rgba(168, 85, 247, 0.4);
+  }
+
+  /* ============================================
+     Spacing Utilities
+     ============================================ */
+
+  .safe-area-top {
+    padding-top: 44px;
+  }
+
+  .safe-area-bottom {
+    padding-bottom: 34px;
+  }
+
+  /* ============================================
+     Flex Utilities
+     ============================================ */
+
+  .center {
+    align-items: center;
+    justify-content: center;
+  }
+
+  .row-between {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .row-center {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+  }
+}

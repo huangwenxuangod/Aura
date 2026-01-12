@@ -1,0 +1,505 @@
+# Aura / 诺值 - Cursor Rules
+
+## 项目概述
+
+Aura（国际）/ 诺值（国内）是一款**行为预测**应用，用户对自己的行为做出预测，投入 Credit 证明信心，邀请裁判监督和判定。
+
+### 技术栈
+
+- **包管理**: pnpm
+- **客户端**: React Native (Expo)
+- **路由**: Expo Router
+- **UI**: NativeWind (Tailwind CSS for RN)
+- **状态管理**: Zustand
+- **后端**: Supabase (PostgreSQL + Auth + Storage + Edge Functions)
+- **支付**: Stripe (国际) / 微信支付 (国内)
+- **深度链接**: Firebase Dynamic Links
+- **语言**: TypeScript (严格模式)
+
+---
+
+## 核心业务逻辑
+
+### 预测状态
+
+```
+ACTIVE → JUDGING → SUCCESS / FAILED
+```
+
+| 状态 | 说明 |
+|------|------|
+| ACTIVE | 进行中，用户可打卡，等待裁判加入 |
+| JUDGING | 判定中，等待裁判投票（24h） |
+| SUCCESS | 成功，Credit 返还 |
+| FAILED | 失败，进入恢复模式或没收 |
+
+### 用户状态
+
+```
+IDLE ↔ RECOVERY
+```
+
+| 状态 | 说明 |
+|------|------|
+| IDLE | 空闲，可创建新预测 |
+| RECOVERY | 恢复模式，需连续成功 2 次 |
+
+### 关键规则
+
+```typescript
+// 1. 单预测约束：用户同时只能有一个 ACTIVE/JUDGING 预测
+if (hasActivePrediction) {
+  throw new Error('Already have an active prediction');
+}
+
+// 2. Credit 范围
+const MIN_STAKE = 10;
+const MAX_STAKE = 1000;
+
+// 3. 裁判投票规则
+const success = yesVotes / totalReferees > 0.5;
+
+// 4. 超时规则
+// - 24h 无裁判加入 → FAILED
+// - 24h 裁判未投票 → 视为同意
+
+// 5. 恢复模式
+// - 首次失败 → 进入恢复模式
+// - 恢复中连续成功 2 次 → 恢复 Credit
+// - 恢复中失败 → Credit 没收
+```
+
+---
+
+## 代码规范
+
+### 目录结构
+
+```
+app/                    # Expo Router 页面
+├── (auth)/            # 认证页面组
+├── (tabs)/            # Tab 页面组
+├── (screens)/         # 其他页面
+├── referee/           # 裁判相关
+components/            # 组件
+├── ui/               # 基础 UI
+├── prediction/       # 预测相关
+├── home/             # 首页相关
+├── shared/           # 共享组件
+lib/                   # 工具库
+services/              # 业务逻辑
+stores/                # Zustand Store
+hooks/                 # 自定义 Hooks
+types/                 # TypeScript 类型
+supabase/              # Supabase 配置
+```
+
+### 命名规范
+
+```typescript
+// 文件命名
+components/ui/Button.tsx          // 组件: PascalCase
+services/prediction.service.ts    // 服务: kebab-case
+stores/usePredictionStore.ts      // Store: use 前缀
+hooks/useCountdown.ts             // Hook: use 前缀
+
+// 变量命名
+const predictionService = {};     // camelCase
+const MIN_STAKE = 10;             // 常量: SCREAMING_SNAKE_CASE
+type PredictionStatus = 'ACTIVE'; // 类型: PascalCase
+interface CreatePredictionInput {} // 接口: PascalCase
+
+// 数据库字段
+user_id, credit_balance, referee_code  // snake_case
+```
+
+### TypeScript 规范
+
+```typescript
+// ✅ 使用严格类型
+interface Prediction {
+  id: string;
+  title: string;
+  stake: number;
+  status: PredictionStatus;
+  deadline: Date;
+}
+
+// ✅ 使用 Zod 验证
+import { z } from 'zod';
+
+const createPredictionSchema = z.object({
+  title: z.string().min(1).max(100),
+  stake: z.number().min(10).max(1000),
+  deadline: z.string().datetime(),
+});
+
+type CreatePredictionInput = z.infer<typeof createPredictionSchema>;
+
+// ❌ 禁止 any
+const data: any = response; // 禁止
+
+// ❌ 避免类型断言
+const prediction = data as Prediction; // 尽量避免
+```
+
+### React Native 规范
+
+```tsx
+// ✅ 函数组件 + TypeScript
+interface PredictionCardProps {
+  prediction: Prediction;
+  onPress: () => void;
+}
+
+export function PredictionCard({ prediction, onPress }: PredictionCardProps) {
+  return (
+    <Pressable onPress={onPress} className="bg-white p-4 rounded-xl">
+      <Text className="text-lg font-semibold">{prediction.title}</Text>
+    </Pressable>
+  );
+}
+
+// ✅ 使用 NativeWind
+<View className="flex-1 bg-black p-4">
+  <Text className="text-2xl font-bold text-white">
+    {credit} Credit
+  </Text>
+</View>
+
+// ❌ 禁止内联样式
+<View style={{ flex: 1, padding: 16 }}> // 禁止
+```
+
+### Supabase 规范
+
+```typescript
+// ✅ 使用 RPC 函数处理复杂逻辑
+const { data, error } = await supabase.rpc('create_prediction', {
+  p_title: title,
+  p_stake: stake,
+  p_deadline: deadline,
+});
+
+// ✅ 错误处理
+if (error) {
+  if (error.message.includes('Insufficient credit')) {
+    throw new InsufficientCreditError();
+  }
+  throw new Error(error.message);
+}
+
+// ✅ 使用生成的类型
+import { Database } from '@/types/database.types';
+type Prediction = Database['public']['Tables']['predictions']['Row'];
+
+// ❌ 禁止客户端直接修改敏感数据
+await supabase.from('users').update({ credit_balance: 9999 }); // 禁止
+```
+
+### Zustand 规范
+
+```typescript
+// ✅ 简洁的 Store
+interface UserState {
+  user: User | null;
+  isLoading: boolean;
+  fetchUser: () => Promise<void>;
+  reset: () => void;
+}
+
+export const useUserStore = create<UserState>((set) => ({
+  user: null,
+  isLoading: false,
+  
+  fetchUser: async () => {
+    set({ isLoading: true });
+    try {
+      const { data } = await supabase.from('users').select('*').single();
+      set({ user: data });
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+  
+  reset: () => set({ user: null, isLoading: false }),
+}));
+
+// ✅ 选择性订阅
+const credit = useUserStore((s) => s.user?.credit_balance);
+
+// ❌ 避免订阅整个 store
+const store = useUserStore(); // 会导致不必要的重渲染
+```
+
+---
+
+## UI 设计规范
+
+### 设计风格
+
+**极简、黑白为主、Forfeit 风格**
+
+### 颜色系统
+
+```typescript
+const colors = {
+  // 背景
+  background: '#000000',      // 主背景（黑）
+  card: '#111111',            // 卡片背景
+  
+  // 文字
+  text: '#FFFFFF',            // 主文字（白）
+  textSecondary: '#6B7280',   // 次要文字（灰）
+  
+  // 状态
+  success: '#10B981',         // 成功（绿）
+  danger: '#EF4444',          // 失败/警告（红）
+  warning: '#F59E0B',         // 恢复模式（橙）
+  active: '#3B82F6',          // 进行中（蓝）
+  
+  // 边框
+  border: '#27272A',          // 边框色
+};
+```
+
+### 状态颜色
+
+```typescript
+const statusColors = {
+  ACTIVE: '#3B82F6',   // 蓝色
+  JUDGING: '#F59E0B',  // 橙色
+  SUCCESS: '#10B981',  // 绿色
+  FAILED: '#EF4444',   // 红色
+};
+```
+
+### 组件模式
+
+```tsx
+// 状态徽章
+<StatusBadge status="ACTIVE" />
+
+// 预测卡片
+<PredictionCard
+  prediction={prediction}
+  showCountdown
+  onPress={handlePress}
+/>
+
+// 余额显示
+<BalanceCard
+  available={80}
+  locked={20}  // 恢复模式时显示
+/>
+
+// 恢复进度
+<RecoveryProgress
+  current={1}
+  total={2}
+/>
+```
+
+---
+
+## 数据刷新策略
+
+### 轮询 + 手动刷新
+
+```typescript
+// ✅ 轮询（关键页面）
+const usePolling = (callback: () => void, interval = 30000) => {
+  useEffect(() => {
+    const timer = setInterval(callback, interval);
+    return () => clearInterval(timer);
+  }, [callback, interval]);
+};
+
+// ✅ 手动刷新
+<ScrollView
+  refreshControl={
+    <RefreshControl refreshing={isLoading} onRefresh={refetch} />
+  }
+>
+```
+
+### 不使用实时订阅
+
+MVP 阶段不使用 Supabase Realtime，用轮询 + 手动刷新代替。
+
+---
+
+## 地区切换
+
+### IP 检测
+
+```typescript
+// lib/region.ts
+export type Region = 'global' | 'cn';
+
+export async function detectRegion(): Promise<Region> {
+  try {
+    const response = await fetch('https://ipapi.co/json/');
+    const data = await response.json();
+    return data.country_code === 'CN' ? 'cn' : 'global';
+  } catch {
+    return 'global';
+  }
+}
+```
+
+### 地区差异
+
+```typescript
+const regionConfig = {
+  global: {
+    appName: 'Aura',
+    currency: 'USD',
+    currencySymbol: '$',
+    creditRate: 10,  // $1 = 10 Credit
+    authMethods: ['google', 'email'],
+    paymentMethod: 'stripe',
+  },
+  cn: {
+    appName: '诺值',
+    currency: 'CNY',
+    currencySymbol: '¥',
+    creditRate: 1,   // ¥1 = 1 Credit
+    authMethods: ['wechat', 'phone'],
+    paymentMethod: 'wechat',
+  },
+};
+```
+
+---
+
+## 常见模式
+
+### 加载状态
+
+```tsx
+if (isLoading) return <LoadingSpinner />;
+if (error) return <ErrorView error={error} onRetry={refetch} />;
+return <DataView data={data} />;
+```
+
+### 表单处理
+
+```tsx
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+
+const { control, handleSubmit, formState: { errors } } = useForm({
+  resolver: zodResolver(createPredictionSchema),
+  defaultValues: { title: '', stake: 100 },
+});
+```
+
+### 错误处理
+
+```typescript
+try {
+  await predictionService.create(input);
+  Toast.show({ type: 'success', text1: '预测创建成功' });
+} catch (error) {
+  if (error instanceof InsufficientCreditError) {
+    Toast.show({ type: 'error', text1: 'Credit 不足' });
+  } else {
+    Toast.show({ type: 'error', text1: '创建失败，请重试' });
+  }
+}
+```
+
+### 弹窗确认
+
+```typescript
+// 重要操作需要弹窗确认
+Alert.alert(
+  '确认判定',
+  '确定要请求裁判判定吗？',
+  [
+    { text: '取消', style: 'cancel' },
+    { text: '确认', onPress: handleConfirm },
+  ]
+);
+```
+
+---
+
+## 禁止事项
+
+```
+❌ 不要使用 any 类型
+❌ 不要在客户端直接操作 Credit
+❌ 不要硬编码敏感信息
+❌ 不要跳过错误处理
+❌ 不要使用内联样式（用 NativeWind）
+❌ 不要使用 Supabase Realtime（MVP 阶段）
+❌ 不要添加 PRD 未规划的功能
+❌ 不要过早优化
+```
+
+---
+
+## 快速参考
+
+### 常用命令
+
+```bash
+# 安装依赖
+pnpm install
+
+# 开发
+pnpm expo start
+
+# 类型检查
+pnpm tsc --noEmit
+
+# Lint
+pnpm eslint .
+
+# Supabase 类型生成
+pnpm supabase gen types typescript --project-id $PROJECT_ID > types/database.types.ts
+
+# Supabase 本地开发
+pnpm supabase start
+pnpm supabase db push
+```
+
+### 关键常量
+
+```typescript
+// lib/constants.ts
+
+export const CREDIT = {
+  MIN_STAKE: 10,
+  MAX_STAKE: 1000,
+};
+
+export const TIMEOUT = {
+  REFEREE_JOIN: 24 * 60 * 60 * 1000,  // 24h
+  REFEREE_VOTE: 24 * 60 * 60 * 1000,  // 24h
+  POLLING_INTERVAL: 30 * 1000,         // 30s
+};
+
+export const RECOVERY = {
+  REQUIRED_SUCCESS: 2,
+};
+
+export const EXCHANGE_RATE = {
+  global: 10,  // $1 = 10 Credit
+  cn: 1,       // ¥1 = 1 Credit
+};
+```
+
+### 状态定义
+
+```typescript
+// types/index.ts
+
+export type PredictionStatus = 'ACTIVE' | 'JUDGING' | 'SUCCESS' | 'FAILED';
+export type UserStatus = 'IDLE' | 'RECOVERY';
+export type RecoveryStatus = 'IN_PROGRESS' | 'RECOVERED' | 'FORFEITED';
+export type Vote = 'YES' | 'NO';
+export type Region = 'global' | 'cn';
+```

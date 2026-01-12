@@ -1,0 +1,95 @@
+# version 已废弃，Docker Compose V2 不需要
+
+services:
+  # 轻量级开发环境 - 推荐使用
+  # 适合使用 Expo Go App 或 Web 浏览器开发
+  aura-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: aura-dev
+    volumes:
+      # 挂载源代码，实现热重载
+      - .:/app
+      # 排除 node_modules，使用容器内的
+      - /app/node_modules
+    ports:
+      - "8081:8081"   # Metro bundler
+      - "19000:19000" # Expo
+      - "19001:19001" # Expo
+      - "19002:19002" # Expo DevTools
+    environment:
+      - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
+      - REACT_NATIVE_PACKAGER_HOSTNAME=${HOST_IP:-localhost}
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    command: pnpm start --tunnel
+
+  # 完整开发环境 - 包含 Android SDK
+  # 适合需要构建 APK 或使用 Android 模拟器
+  aura-full:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aura-full
+    volumes:
+      - .:/app
+      - /app/node_modules
+      # 持久化 Gradle 缓存
+      - gradle-cache:/root/.gradle
+    ports:
+      - "8081:8081"
+      - "19000:19000"
+      - "19001:19001"
+      - "19002:19002"
+    environment:
+      - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
+      - REACT_NATIVE_PACKAGER_HOSTNAME=${HOST_IP:-localhost}
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    # 如果需要 USB 调试连接真机，取消下面的注释
+    # privileged: true
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb
+
+  # Supabase 本地开发 (可选)
+  # 如果你想在本地运行 Supabase
+  supabase-db:
+    image: supabase/postgres:15.1.0.117
+    container_name: aura-supabase-db
+    ports:
+      - "54322:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+    profiles:
+      - supabase
+
+  supabase-studio:
+    image: supabase/studio:20240101-ce42139
+    container_name: aura-supabase-studio
+    ports:
+      - "54323:3000"
+    environment:
+      STUDIO_PG_META_URL: http://supabase-meta:8080
+      POSTGRES_PASSWORD: postgres
+      DEFAULT_ORGANIZATION_NAME: Aura
+      DEFAULT_PROJECT_NAME: Aura
+      SUPABASE_URL: http://supabase-kong:8000
+      SUPABASE_PUBLIC_URL: http://localhost:54321
+    profiles:
+      - supabase
+
+volumes:
+  gradle-cache:
+  supabase-db-data:
+
+networks:
+  default:
+    name: aura-network

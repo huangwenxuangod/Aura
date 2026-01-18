@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { View, Text } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 type TabIconProps = {
@@ -10,15 +10,13 @@ type TabIconProps = {
 
 function TabIcon({ name, focused, label }: TabIconProps) {
   return (
-    <View className="items-center justify-center pt-2">
+    <View style={styles.tabIconContainer}>
       <Ionicons
-        name={name}
-        size={24}
-        color={focused ? '#FFFFFF' : '#6B7280'}
+        name={focused ? name : `${name}-outline` as keyof typeof Ionicons.glyphMap}
+        size={22}
+        color={focused ? '#FFFFFF' : '#6b7280'}
       />
-      <Text
-        className={`text-xs mt-1 ${focused ? 'text-white' : 'text-gray-500'}`}
-      >
+      <Text style={[styles.label, focused && styles.labelActive]}>
         {label}
       </Text>
     </View>
@@ -31,13 +29,7 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: false,
-        tabBarStyle: {
-          backgroundColor: '#000000',
-          borderTopWidth: 1,
-          borderTopColor: '#27272A',
-          height: 80,
-          paddingBottom: 20,
-        },
+        tabBarStyle: styles.tabBar,
       }}
     >
       <Tabs.Screen
@@ -57,6 +49,14 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="referee"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon name="eye" focused={focused} label="监督" />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           tabBarIcon: ({ focused }) => (
@@ -67,3 +67,34 @@ export default function TabLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 60,
+    backgroundColor: '#030712',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+    elevation: 0,
+    shadowOpacity: 0,
+    paddingBottom: 6,
+    paddingTop: 6,
+  },
+  tabIconContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  labelActive: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+});

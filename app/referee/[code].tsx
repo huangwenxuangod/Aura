@@ -8,6 +8,8 @@ import {
   RefreshControl,
   Alert,
   StyleSheet,
+  Image,
+  TextInput,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,32 +19,32 @@ import Toast from 'react-native-toast-message';
 import { supabase } from '@/lib/supabase';
 import {
   getPredictionByRefereeCode,
-  getReferees,
-  getCheckIns,
   joinAsReferee,
   submitVote,
+  calculateCheckinProgress,
 } from '@/services/prediction.service';
 import { useCountdown } from '@/hooks/useCountdown';
-import { useRefresh } from '@/hooks/usePolling';
-import { formatCredits, formatDate } from '@/lib/utils';
-import type { Prediction, Referee, CheckIn } from '@/types';
+import { useRegionStore } from '@/stores/useRegionStore';
+import type { PredictionDetail, CheckinPoint } from '@/types';
 
 export default function RefereeScreen() {
   const { code } = useLocalSearchParams<{ code: string }>();
   const router = useRouter();
+  const { region } = useRegionStore();
+  const isChina = region === 'CN';
 
-  const [prediction, setPrediction] = useState<Prediction | null>(null);
-  const [referees, setReferees] = useState<Referee[]>([]);
-  const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
+  const [prediction, setPrediction] = useState<PredictionDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [isVoting, setIsVoting] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [voteComment, setVoteComment] = useState('');
 
   const countdown = useCountdown(prediction?.deadline || null);
 
-  // Check authentication
+  // 检查认证状态
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setCurrentUserId(user?.id || null);
@@ -50,44 +52,47 @@ export default function RefereeScreen() {
     });
   }, []);
 
+  // 加载数据
   const loadData = useCallback(async () => {
     if (!code) return;
 
-    const predictionData = await getPredictionByRefereeCode(code);
-    if (predictionData) {
-      const [refereesData, checkInsData] = await Promise.all([
-        getReferees(predictionData.id),
-        getCheckIns(predictionData.id),
-      ]);
-
-      setPrediction(predictionData);
-      setReferees(refereesData);
-      setCheckIns(checkInsData);
-    }
+    const data = await getPredictionByRefereeCode(code);
+    setPrediction(data);
   }, [code]);
 
   useEffect(() => {
     loadData().finally(() => setIsLoading(false));
   }, [loadData]);
 
-  const { isRefreshing, onRefresh } = useRefresh(loadData);
+  const onRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    await loadData();
+    setIsRefreshing(false);
+  }, [loadData]);
+
+  // 计算状态
+  const referees = prediction?.referees || [];
+  const checkins = prediction?.checkins || [];
+  const checkinPoints = prediction?.checkin_points || [];
+  const progress = calculateCheckinProgress(checkinPoints);
 
   const isReferee = referees.some((r) => r.user_id === currentUserId);
   const currentReferee = referees.find((r) => r.user_id === currentUserId);
   const hasVoted = currentReferee?.vote !== null;
-  const canVote = prediction?.status === 'JUDGING' && isReferee && !hasVoted;
+  const canVote = prediction?.status === 'judging' && isReferee && !hasVoted;
   const isCreator = prediction?.user_id === currentUserId;
 
+  // 加入成为裁判
   const handleJoin = async () => {
     if (!isAuthenticated) {
       Alert.alert(
-        'Sign In Required',
-        'You need to sign in to become a referee.',
+        isChina ? '需要登录' : 'Sign In Required',
+        isChina ? '请先登录才能成为裁判' : 'You need to sign in to become a referee.',
         [
-          { text: 'Cancel', style: 'cancel' },
+          { text: isChina ? '取消' : 'Cancel', style: 'cancel' },
           {
-            text: 'Sign In',
-            onPress: () => router.push('/login'),
+            text: isChina ? '登录' : 'Sign In',
+            onPress: () => router.push('/(auth)/login'),
           },
         ]
       );
@@ -97,7 +102,7 @@ export default function RefereeScreen() {
     if (isCreator) {
       Toast.show({
         type: 'error',
-        text1: 'Cannot join your own prediction',
+        text1: isChina ? '不能给自己的预测当裁判' : 'Cannot join your own prediction',
       });
       return;
     }
@@ -108,13 +113,12 @@ export default function RefereeScreen() {
       await loadData();
       Toast.show({
         type: 'success',
-        text1: 'You are now a referee!',
-        text2: 'You can vote when judgment is requested',
+        text1: isChina ? '你现在是裁判了！' : 'You are now a referee!',
       });
     } catch (error: any) {
       Toast.show({
         type: 'error',
-        text1: 'Failed to join',
+        text1: isChina ? '加入失败' : 'Failed to join',
         text2: error.message,
       });
     } finally {
@@ -122,27 +126,34 @@ export default function RefereeScreen() {
     }
   };
 
-  const handleVote = (vote: 'YES' | 'NO') => {
+  // 投票
+  const handleVote = (vote: 'success' | 'failure') => {
+    const voteText = vote === 'success' 
+      ? (isChina ? '成功' : 'Success') 
+      : (isChina ? '失败' : 'Failure');
+
     Alert.alert(
-      `Vote ${vote === 'YES' ? 'Success' : 'Failure'}`,
-      `Are you sure you want to vote that this prediction ${vote === 'YES' ? 'succeeded' : 'failed'}? This cannot be changed.`,
+      isChina ? `投票: ${voteText}` : `Vote: ${voteText}`,
+      isChina 
+        ? `确定投票「${voteText}」吗？投票后不可更改。`
+        : `Are you sure you want to vote "${voteText}"? This cannot be changed.`,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: isChina ? '取消' : 'Cancel', style: 'cancel' },
         {
-          text: 'Confirm',
+          text: isChina ? '确定' : 'Confirm',
           onPress: async () => {
             setIsVoting(true);
             try {
-              await submitVote(prediction!.id, vote);
+              await submitVote(prediction!.id, vote, voteComment || undefined);
               await loadData();
               Toast.show({
                 type: 'success',
-                text1: 'Vote submitted!',
+                text1: isChina ? '投票成功！' : 'Vote submitted!',
               });
             } catch (error: any) {
               Toast.show({
                 type: 'error',
-                text1: 'Failed to vote',
+                text1: isChina ? '投票失败' : 'Failed to vote',
                 text2: error.message,
               });
             } finally {
@@ -163,16 +174,16 @@ export default function RefereeScreen() {
           style={styles.loadingGradient}
         />
         <SafeAreaView style={styles.loadingContainer}>
-          <View style={styles.loadingSpinner}>
-            <ActivityIndicator size="large" color="#c084fc" />
-          </View>
-          <Text style={styles.loadingText}>Loading prediction...</Text>
+          <ActivityIndicator size="large" color="#c084fc" />
+          <Text style={styles.loadingText}>
+            {isChina ? '加载中...' : 'Loading prediction...'}
+          </Text>
         </SafeAreaView>
       </View>
     );
   }
 
-  // Error State - Invalid Code
+  // Error State
   if (!prediction) {
     return (
       <View style={styles.container}>
@@ -182,50 +193,36 @@ export default function RefereeScreen() {
         />
         <SafeAreaView style={styles.errorContainer}>
           <View style={styles.errorIconContainer}>
-            <LinearGradient
-              colors={['rgba(239, 68, 68, 0.2)', 'rgba(239, 68, 68, 0.1)']}
-              style={styles.errorIconGradient}
-            >
-              <Ionicons name="alert-circle" size={48} color="#ef4444" />
-            </LinearGradient>
+            <Ionicons name="alert-circle" size={64} color="#ef4444" />
           </View>
-          <Text style={styles.errorTitle}>Invalid Referee Code</Text>
-          <Text style={styles.errorDesc}>
-            This referee code doesn't exist or has expired.
+          <Text style={styles.errorTitle}>
+            {isChina ? '裁判码无效' : 'Invalid Referee Code'}
           </Text>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.errorButton}
-            activeOpacity={0.8}
-          >
-            <LinearGradient
-              colors={['rgba(255, 255, 255, 0.08)', 'rgba(255, 255, 255, 0.04)']}
-              style={styles.errorButtonGradient}
-            >
-              <Text style={styles.errorButtonText}>Go Back</Text>
-            </LinearGradient>
+          <Text style={styles.errorDesc}>
+            {isChina ? '这个裁判码不存在或已过期' : 'This referee code doesn\'t exist or has expired.'}
+          </Text>
+          <TouchableOpacity onPress={() => router.back()} style={styles.errorButton}>
+            <Text style={styles.errorButtonText}>{isChina ? '返回' : 'Go Back'}</Text>
           </TouchableOpacity>
         </SafeAreaView>
       </View>
     );
   }
 
-  const creator = (prediction as any).users;
-
-  const statusConfig = {
-    ACTIVE: { color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)', label: 'Active' },
-    JUDGING: { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)', label: 'Awaiting Your Vote' },
-    SUCCESS: { color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)', label: 'Completed - Success' },
-    FAILED: { color: '#ef4444', bgColor: 'rgba(239, 68, 68, 0.15)', label: 'Completed - Failed' },
-    CANCELLED: { color: '#64748b', bgColor: 'rgba(100, 116, 139, 0.15)', label: 'Cancelled' },
+  // 状态配置
+  const statusConfig: Record<string, any> = {
+    active: { color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)', label: isChina ? '进行中' : 'Active' },
+    judging: { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)', label: isChina ? '等待投票' : 'Awaiting Your Vote' },
+    settled: { color: '#64748b', bgColor: 'rgba(100, 116, 139, 0.15)', label: isChina ? '已结算' : 'Settled' },
   };
+  const currentStatus = statusConfig[prediction.status] || statusConfig.active;
 
-  const currentStatus = statusConfig[prediction.status] || statusConfig.ACTIVE;
-
-  // Vote results
-  const yesVotes = referees.filter((r) => r.vote === 'YES').length;
-  const noVotes = referees.filter((r) => r.vote === 'NO').length;
+  // 投票统计
+  const yesVotes = referees.filter((r) => r.vote === 'success').length;
+  const noVotes = referees.filter((r) => r.vote === 'failure').length;
   const totalVotes = yesVotes + noVotes;
+
+  const creator = (prediction as any).user;
 
   return (
     <View style={styles.container}>
@@ -256,247 +253,263 @@ export default function RefereeScreen() {
         >
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity
-              onPress={() => router.back()}
-              style={styles.backButton}
-              activeOpacity={0.8}
-            >
-              <LinearGradient
-                colors={['rgba(255, 255, 255, 0.08)', 'rgba(255, 255, 255, 0.04)']}
-                style={styles.backButtonGradient}
-              >
-                <Ionicons name="arrow-back" size={22} color="#f8fafc" />
-              </LinearGradient>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+              <Ionicons name="arrow-back" size={24} color="#a855f7" />
             </TouchableOpacity>
-            <View style={styles.headerCenter}>
-              <Text style={styles.headerLabel}>Referee View</Text>
-            </View>
+            <Text style={styles.headerTitle}>
+              {isChina ? '裁判视角' : 'Referee View'}
+            </Text>
             <View style={styles.headerSpacer} />
           </View>
 
-          {/* Creator Info */}
-          <View style={styles.creatorSection}>
-            <View style={styles.creatorCard}>
-              <LinearGradient
-                colors={['rgba(168, 85, 247, 0.08)', 'rgba(255, 255, 255, 0.03)']}
-                style={styles.creatorGradient}
-              >
-                <View style={styles.creatorInfo}>
-                  <View style={styles.creatorAvatar}>
-                    <LinearGradient
-                      colors={['#c084fc', '#a855f7', '#9333ea']}
-                      style={styles.creatorAvatarGradient}
-                    >
-                      <Text style={styles.creatorAvatarText}>
-                        {creator?.display_name?.charAt(0).toUpperCase() || '?'}
-                      </Text>
-                    </LinearGradient>
-                  </View>
-                  <View style={styles.creatorDetails}>
-                    <Text style={styles.creatorName}>
-                      {creator?.display_name || 'Anonymous'}
-                    </Text>
-                    <Text style={styles.creatorLabel}>is predicting</Text>
-                  </View>
-                </View>
-
-                {/* Status Badge */}
-                <View style={[styles.statusBadge, { backgroundColor: currentStatus.bgColor }]}>
-                  <View style={[styles.statusDot, { backgroundColor: currentStatus.color }]} />
-                  <Text style={[styles.statusText, { color: currentStatus.color }]}>
-                    {currentStatus.label}
+          {/* Creator Card */}
+          <View style={styles.creatorCard}>
+            <LinearGradient
+              colors={['rgba(168, 85, 247, 0.08)', 'rgba(255, 255, 255, 0.03)']}
+              style={styles.creatorGradient}
+            >
+              <View style={styles.creatorInfo}>
+                <View style={styles.creatorAvatar}>
+                  <Text style={styles.creatorAvatarText}>
+                    {creator?.display_name?.charAt(0).toUpperCase() || '?'}
                   </Text>
                 </View>
-              </LinearGradient>
-            </View>
+                <View style={styles.creatorDetails}>
+                  <Text style={styles.creatorName}>
+                    {creator?.display_name || 'Anonymous'}
+                  </Text>
+                  <Text style={styles.creatorLabel}>
+                    {isChina ? '的预测' : 'is predicting'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.statusBadge, { backgroundColor: currentStatus.bgColor }]}>
+                <View style={[styles.statusDot, { backgroundColor: currentStatus.color }]} />
+                <Text style={[styles.statusText, { color: currentStatus.color }]}>
+                  {currentStatus.label}
+                </Text>
+              </View>
+            </LinearGradient>
           </View>
 
-          {/* Prediction Content */}
-          <View style={styles.predictionSection}>
+          {/* Prediction Title */}
+          <View style={styles.titleSection}>
             <Text style={styles.predictionTitle}>{prediction.title}</Text>
             {prediction.description && (
               <Text style={styles.predictionDesc}>{prediction.description}</Text>
             )}
           </View>
 
-          {/* Info Cards */}
-          <View style={styles.infoCards}>
-            <View style={styles.infoCard}>
-              <LinearGradient
-                colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-                style={styles.infoCardGradient}
-              >
-                <Ionicons name="calendar-outline" size={20} color="#64748b" />
-                <Text style={styles.infoCardLabel}>Deadline</Text>
-                <Text style={styles.infoCardValue}>{formatDate(prediction.deadline)}</Text>
-              </LinearGradient>
-            </View>
-            <View style={styles.infoCard}>
-              <LinearGradient
-                colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-                style={styles.infoCardGradient}
-              >
-                <Ionicons name="time-outline" size={20} color="#64748b" />
-                <Text style={styles.infoCardLabel}>Time Left</Text>
-                <Text style={[
-                  styles.infoCardValue,
-                  countdown.isExpired && styles.infoCardValueExpired
-                ]}>
-                  {countdown.formatted}
-                </Text>
-              </LinearGradient>
-            </View>
-          </View>
-
-          {/* Stake Card */}
-          <View style={styles.stakeCard}>
-            <LinearGradient
-              colors={['rgba(168, 85, 247, 0.1)', 'rgba(168, 85, 247, 0.03)']}
-              style={styles.stakeGradient}
-            >
-              <View style={styles.stakeIconContainer}>
-                <Ionicons name="diamond" size={22} color="#c084fc" />
-              </View>
-              <View style={styles.stakeContent}>
-                <Text style={styles.stakeLabel}>Stake</Text>
-                <Text style={styles.stakeValue}>
-                  {prediction.is_recovery ? 'Recovery Mode' : `${formatCredits(prediction.stake)} credits`}
-                </Text>
-              </View>
-            </LinearGradient>
-          </View>
-
-          {/* Check-ins */}
-          <View style={styles.checkInsSection}>
+          {/* 📍 打卡点进度 - 核心展示 */}
+          <View style={styles.progressCard}>
             <Text style={styles.sectionTitle}>
-              Check-in Records ({checkIns.length})
+              {isChina ? '📍 打卡进度' : '📍 Checkin Progress'}
+            </Text>
+            
+            <View style={styles.progressStats}>
+              <View style={styles.progressStatItem}>
+                <Text style={styles.progressStatValue}>{progress.completed}</Text>
+                <Text style={styles.progressStatLabel}>{isChina ? '已完成' : 'Done'}</Text>
+              </View>
+              <View style={styles.progressStatDivider} />
+              <View style={styles.progressStatItem}>
+                <Text style={[styles.progressStatValue, { color: '#ef4444' }]}>{progress.missed}</Text>
+                <Text style={styles.progressStatLabel}>{isChina ? '已错过' : 'Missed'}</Text>
+              </View>
+              <View style={styles.progressStatDivider} />
+              <View style={styles.progressStatItem}>
+                <Text style={styles.progressStatValue}>{progress.pending}</Text>
+                <Text style={styles.progressStatLabel}>{isChina ? '待完成' : 'Pending'}</Text>
+              </View>
+            </View>
+
+            {/* 进度条 */}
+            <View style={styles.progressBar}>
+              <View 
+                style={[styles.progressBarFill, { width: `${(progress.completed / progress.total) * 100}%` }]} 
+              />
+              <View 
+                style={[
+                  styles.progressBarMissed, 
+                  { 
+                    width: `${(progress.missed / progress.total) * 100}%`,
+                    left: `${(progress.completed / progress.total) * 100}%`
+                  }
+                ]} 
+              />
+            </View>
+
+            {/* 奖励统计 */}
+            <View style={styles.rewardRow}>
+              <View style={styles.rewardItem}>
+                <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+                <Text style={styles.rewardText}>
+                  {isChina ? `已获得 ${progress.earnedReward}` : `Earned ${progress.earnedReward}`}
+                </Text>
+              </View>
+              {progress.lostReward > 0 && (
+                <View style={styles.rewardItem}>
+                  <Ionicons name="close-circle" size={16} color="#ef4444" />
+                  <Text style={styles.rewardText}>
+                    {isChina ? `已损失 ${progress.lostReward}` : `Lost ${progress.lostReward}`}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* 💰 奖励分配 */}
+          <View style={styles.rewardCard}>
+            <Text style={styles.sectionTitle}>
+              {isChina ? '💰 奖励分配' : '💰 Reward Split'}
+            </Text>
+            <View style={styles.rewardSplit}>
+              <View style={styles.rewardSplitItem}>
+                <Text style={styles.rewardSplitLabel}>{isChina ? '打卡奖励' : 'Checkin'}</Text>
+                <Text style={styles.rewardSplitValue}>{prediction.checkin_reward}</Text>
+              </View>
+              <View style={styles.rewardSplitItem}>
+                <Text style={styles.rewardSplitLabel}>{isChina ? '结果奖励' : 'Result'}</Text>
+                <Text style={[styles.rewardSplitValue, { color: '#06b6d4' }]}>{prediction.result_reward}</Text>
+              </View>
+              <View style={styles.rewardSplitItem}>
+                <Text style={styles.rewardSplitLabel}>{isChina ? '总押注' : 'Total'}</Text>
+                <Text style={[styles.rewardSplitValue, { color: '#a855f7' }]}>{prediction.total_stake}</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* 📝 打卡记录详情 - 裁判判断依据 */}
+          <View style={styles.checkinsSection}>
+            <Text style={styles.sectionTitle}>
+              {isChina ? '📝 打卡记录 (裁判判断依据)' : '📝 Checkin Records (Judge Based On)'}
             </Text>
 
-            {checkIns.length === 0 ? (
-              <View style={styles.emptyCheckIns}>
-                <LinearGradient
-                  colors={['rgba(255, 255, 255, 0.03)', 'rgba(255, 255, 255, 0.01)']}
-                  style={styles.emptyCheckInsGradient}
-                >
-                  <Ionicons name="document-text-outline" size={32} color="#3f3f46" />
-                  <Text style={styles.emptyCheckInsText}>No check-ins yet</Text>
-                </LinearGradient>
+            {checkins.length === 0 ? (
+              <View style={styles.emptyCheckins}>
+                <Ionicons name="document-text-outline" size={40} color="#3f3f46" />
+                <Text style={styles.emptyCheckinsText}>
+                  {isChina ? '还没有打卡记录' : 'No checkins yet'}
+                </Text>
               </View>
             ) : (
-              checkIns.map((checkIn, index) => (
-                <View key={checkIn.id} style={styles.checkInCard}>
-                  <LinearGradient
-                    colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-                    style={styles.checkInGradient}
-                  >
-                    <View style={styles.checkInNumber}>
-                      <Text style={styles.checkInNumberText}>#{index + 1}</Text>
+              checkins.map((checkin, index) => {
+                const relatedPoint = checkinPoints.find(p => p.id === checkin.checkin_point_id);
+                return (
+                  <View key={checkin.id} style={styles.checkinCard}>
+                    <View style={styles.checkinHeader}>
+                      <View style={styles.checkinIndex}>
+                        <Text style={styles.checkinIndexText}>#{checkins.length - index}</Text>
+                      </View>
+                      <View style={styles.checkinMeta}>
+                        <Text style={styles.checkinDate}>
+                          {new Date(checkin.created_at).toLocaleDateString(isChina ? 'zh-CN' : 'en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </Text>
+                        {relatedPoint && (
+                          <View style={styles.checkinPointBadge}>
+                            <Ionicons name="flag" size={12} color="#10b981" />
+                            <Text style={styles.checkinPointText}>
+                              {isChina ? `第${relatedPoint.point_index}点` : `#${relatedPoint.point_index}`}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
                     </View>
-                    <View style={styles.checkInContent}>
-                      <Text style={styles.checkInText}>{checkIn.content}</Text>
-                      <Text style={styles.checkInDate}>{formatDate(checkIn.created_at)}</Text>
-                    </View>
-                  </LinearGradient>
-                </View>
-              ))
+                    
+                    <Text style={styles.checkinContent}>{checkin.content}</Text>
+                    
+                    {checkin.image_url && (
+                      <Image
+                        source={{ uri: checkin.image_url }}
+                        style={styles.checkinImage}
+                        resizeMode="cover"
+                      />
+                    )}
+                  </View>
+                );
+              })
             )}
           </View>
 
-          {/* Voting Results */}
-          {prediction.status === 'JUDGING' && totalVotes > 0 && (
-            <View style={styles.votingSection}>
-              <Text style={styles.sectionTitle}>Current Votes</Text>
-              <View style={styles.votingCard}>
-                <LinearGradient
-                  colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-                  style={styles.votingGradient}
-                >
-                  <View style={styles.votingRow}>
-                    <View style={styles.voteItem}>
-                      <View style={[styles.voteIcon, styles.voteIconSuccess]}>
-                        <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-                      </View>
-                      <Text style={styles.voteLabel}>Success</Text>
-                      <Text style={styles.voteCount}>{yesVotes}</Text>
-                    </View>
-                    <View style={styles.voteDivider} />
-                    <View style={styles.voteItem}>
-                      <View style={[styles.voteIcon, styles.voteIconFail]}>
-                        <Ionicons name="close-circle" size={18} color="#ef4444" />
-                      </View>
-                      <Text style={styles.voteLabel}>Failed</Text>
-                      <Text style={styles.voteCount}>{noVotes}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.voteProgressTrack}>
-                    {yesVotes > 0 && (
-                      <View style={[styles.voteProgressBar, styles.voteProgressSuccess, { flex: yesVotes }]} />
-                    )}
-                    {noVotes > 0 && (
-                      <View style={[styles.voteProgressBar, styles.voteProgressFail, { flex: noVotes }]} />
-                    )}
-                  </View>
-                </LinearGradient>
+          {/* 投票结果 */}
+          {prediction.status === 'judging' && totalVotes > 0 && (
+            <View style={styles.votingResultCard}>
+              <Text style={styles.sectionTitle}>
+                {isChina ? '📊 当前投票' : '📊 Current Votes'}
+              </Text>
+              <View style={styles.votingRow}>
+                <View style={styles.voteItem}>
+                  <Ionicons name="checkmark-circle" size={24} color="#10b981" />
+                  <Text style={styles.voteLabel}>{isChina ? '成功' : 'Success'}</Text>
+                  <Text style={styles.voteCount}>{yesVotes}</Text>
+                </View>
+                <View style={styles.voteDivider} />
+                <View style={styles.voteItem}>
+                  <Ionicons name="close-circle" size={24} color="#ef4444" />
+                  <Text style={styles.voteLabel}>{isChina ? '失败' : 'Failed'}</Text>
+                  <Text style={styles.voteCount}>{noVotes}</Text>
+                </View>
               </View>
             </View>
           )}
 
-          {/* Action Section */}
+          {/* 操作区域 */}
           <View style={styles.actionSection}>
-            {/* Join Button */}
-            {!isReferee && !isCreator && prediction.status === 'ACTIVE' && (
+            {/* 加入按钮 */}
+            {!isReferee && !isCreator && prediction.status === 'active' && (
               <TouchableOpacity
                 onPress={handleJoin}
                 disabled={isJoining}
-                style={styles.actionButton}
-                activeOpacity={0.85}
+                style={styles.joinButton}
               >
                 <LinearGradient
                   colors={['#c084fc', '#a855f7', '#9333ea']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.actionButtonGradient}
+                  style={styles.joinButtonGradient}
                 >
                   {isJoining ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
                     <>
-                      <Ionicons name="people" size={22} color="#fff" style={{ marginRight: 10 }} />
-                      <Text style={styles.actionButtonText}>Become a Referee</Text>
+                      <Ionicons name="people" size={22} color="#fff" />
+                      <Text style={styles.joinButtonText}>
+                        {isChina ? '成为裁判' : 'Become a Referee'}
+                      </Text>
                     </>
                   )}
                 </LinearGradient>
               </TouchableOpacity>
             )}
 
-            {/* Referee Status */}
-            {isReferee && !canVote && prediction.status !== 'JUDGING' && (
-              <View style={styles.statusCard}>
-                <LinearGradient
-                  colors={['rgba(16, 185, 129, 0.1)', 'rgba(16, 185, 129, 0.03)']}
-                  style={styles.statusCardGradient}
-                >
-                  <View style={styles.statusCardIcon}>
-                    <Ionicons name="checkmark-circle" size={28} color="#10b981" />
-                  </View>
-                  <Text style={styles.statusCardTitle}>You're a Referee</Text>
-                  <Text style={styles.statusCardDesc}>
-                    You'll be notified when judgment is requested
-                  </Text>
-                </LinearGradient>
-              </View>
-            )}
-
-            {/* Voting Buttons */}
+            {/* 投票区域 */}
             {canVote && (
-              <View style={styles.votingButtons}>
-                <Text style={styles.votingPrompt}>Did they achieve their prediction?</Text>
+              <View style={styles.votingSection}>
+                <Text style={styles.votingPrompt}>
+                  {isChina 
+                    ? '根据打卡记录，你认为 TA 完成目标了吗？'
+                    : 'Based on the checkins, did they achieve their goal?'}
+                </Text>
+
+                {/* 评论输入 */}
+                <TextInput
+                  style={styles.commentInput}
+                  placeholder={isChina ? '添加评语（可选）' : 'Add a comment (optional)'}
+                  placeholderTextColor="#64748b"
+                  value={voteComment}
+                  onChangeText={setVoteComment}
+                  maxLength={200}
+                />
+
                 <View style={styles.voteButtonsRow}>
                   <TouchableOpacity
-                    onPress={() => handleVote('YES')}
+                    onPress={() => handleVote('success')}
                     disabled={isVoting}
                     style={[styles.voteButton, styles.voteButtonSuccess]}
-                    activeOpacity={0.85}
                   >
                     <LinearGradient
                       colors={['#34d399', '#10b981', '#059669']}
@@ -506,17 +519,19 @@ export default function RefereeScreen() {
                         <ActivityIndicator color="#fff" />
                       ) : (
                         <>
-                          <Ionicons name="checkmark" size={28} color="#fff" />
-                          <Text style={styles.voteButtonText}>Yes</Text>
+                          <Ionicons name="checkmark" size={32} color="#fff" />
+                          <Text style={styles.voteButtonText}>
+                            {isChina ? '成功' : 'Success'}
+                          </Text>
                         </>
                       )}
                     </LinearGradient>
                   </TouchableOpacity>
+
                   <TouchableOpacity
-                    onPress={() => handleVote('NO')}
+                    onPress={() => handleVote('failure')}
                     disabled={isVoting}
                     style={[styles.voteButton, styles.voteButtonFail]}
-                    activeOpacity={0.85}
                   >
                     <LinearGradient
                       colors={['#f87171', '#ef4444', '#dc2626']}
@@ -526,8 +541,10 @@ export default function RefereeScreen() {
                         <ActivityIndicator color="#fff" />
                       ) : (
                         <>
-                          <Ionicons name="close" size={28} color="#fff" />
-                          <Text style={styles.voteButtonText}>No</Text>
+                          <Ionicons name="close" size={32} color="#fff" />
+                          <Text style={styles.voteButtonText}>
+                            {isChina ? '失败' : 'Failed'}
+                          </Text>
                         </>
                       )}
                     </LinearGradient>
@@ -536,50 +553,51 @@ export default function RefereeScreen() {
               </View>
             )}
 
-            {/* Already Voted */}
-            {hasVoted && prediction.status === 'JUDGING' && (
+            {/* 已投票状态 */}
+            {hasVoted && prediction.status === 'judging' && (
               <View style={styles.statusCard}>
-                <LinearGradient
-                  colors={currentReferee?.vote === 'YES' 
-                    ? ['rgba(16, 185, 129, 0.1)', 'rgba(16, 185, 129, 0.03)']
-                    : ['rgba(239, 68, 68, 0.1)', 'rgba(239, 68, 68, 0.03)']
-                  }
-                  style={styles.statusCardGradient}
-                >
-                  <View style={styles.statusCardIcon}>
-                    <Ionicons
-                      name={currentReferee?.vote === 'YES' ? 'checkmark-circle' : 'close-circle'}
-                      size={28}
-                      color={currentReferee?.vote === 'YES' ? '#10b981' : '#ef4444'}
-                    />
-                  </View>
-                  <Text style={styles.statusCardTitle}>
-                    You voted: {currentReferee?.vote === 'YES' ? 'Success' : 'Failed'}
-                  </Text>
-                  <Text style={styles.statusCardDesc}>
-                    Waiting for other referees to vote
-                  </Text>
-                </LinearGradient>
+                <Ionicons
+                  name={currentReferee?.vote === 'success' ? 'checkmark-circle' : 'close-circle'}
+                  size={40}
+                  color={currentReferee?.vote === 'success' ? '#10b981' : '#ef4444'}
+                />
+                <Text style={styles.statusCardTitle}>
+                  {isChina 
+                    ? `你投了: ${currentReferee?.vote === 'success' ? '成功' : '失败'}`
+                    : `You voted: ${currentReferee?.vote === 'success' ? 'Success' : 'Failed'}`}
+                </Text>
+                {currentReferee?.comment && (
+                  <Text style={styles.statusCardComment}>"{currentReferee.comment}"</Text>
+                )}
+                <Text style={styles.statusCardDesc}>
+                  {isChina ? '等待其他裁判投票' : 'Waiting for other referees'}
+                </Text>
               </View>
             )}
 
-            {/* Creator Notice */}
+            {/* 已是裁判 */}
+            {isReferee && !canVote && prediction.status === 'active' && (
+              <View style={styles.statusCard}>
+                <Ionicons name="time" size={40} color="#f59e0b" />
+                <Text style={styles.statusCardTitle}>
+                  {isChina ? '你已是裁判' : 'You\'re a Referee'}
+                </Text>
+                <Text style={styles.statusCardDesc}>
+                  {isChina ? '预测结束后你将收到投票通知' : 'You\'ll be notified when judgment is requested'}
+                </Text>
+              </View>
+            )}
+
+            {/* 自己的预测 */}
             {isCreator && (
               <View style={styles.statusCard}>
-                <LinearGradient
-                  colors={['rgba(245, 158, 11, 0.1)', 'rgba(245, 158, 11, 0.03)']}
-                  style={styles.statusCardGradient}
-                >
-                  <View style={styles.statusCardIcon}>
-                    <Ionicons name="information-circle" size={28} color="#f59e0b" />
-                  </View>
-                  <Text style={[styles.statusCardTitle, { color: '#fbbf24' }]}>
-                    This is your prediction
-                  </Text>
-                  <Text style={styles.statusCardDesc}>
-                    You cannot be a referee for your own prediction
-                  </Text>
-                </LinearGradient>
+                <Ionicons name="person" size={40} color="#a855f7" />
+                <Text style={styles.statusCardTitle}>
+                  {isChina ? '这是你的预测' : 'This is your prediction'}
+                </Text>
+                <Text style={styles.statusCardDesc}>
+                  {isChina ? '你不能给自己的预测投票' : 'You cannot vote on your own prediction'}
+                </Text>
               </View>
             )}
           </View>
@@ -625,10 +643,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 120,
+    paddingHorizontal: 16,
+    paddingBottom: 100,
   },
 
-  // Loading State
+  // Loading & Error
   loadingGradient: {
     position: 'absolute',
     top: 0,
@@ -641,15 +660,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loadingSpinner: {
-    marginBottom: 16,
-  },
   loadingText: {
     fontSize: 16,
     color: '#64748b',
+    marginTop: 16,
   },
-
-  // Error State
   errorGradient: {
     position: 'absolute',
     top: 0,
@@ -661,24 +676,16 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    padding: 32,
   },
   errorIconContainer: {
     marginBottom: 24,
-  },
-  errorIconGradient: {
-    width: 100,
-    height: 100,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   errorTitle: {
     fontSize: 22,
     fontWeight: '700',
     color: '#f8fafc',
     marginBottom: 12,
-    textAlign: 'center',
   },
   errorDesc: {
     fontSize: 15,
@@ -687,71 +694,48 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   errorButton: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  errorButtonGradient: {
-    paddingVertical: 16,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 14,
     paddingHorizontal: 32,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 16,
+    borderRadius: 14,
   },
   errorButtonText: {
+    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
-    color: '#f8fafc',
   },
 
   // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 8,
+    paddingVertical: 12,
   },
   backButton: {
-    borderRadius: 14,
-    overflow: 'hidden',
+    padding: 8,
   },
-  backButtonGradient: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-  },
-  headerCenter: {
+  headerTitle: {
     flex: 1,
-    alignItems: 'center',
-  },
-  headerLabel: {
-    fontSize: 14,
-    color: '#64748b',
-    fontWeight: '500',
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#fff',
   },
   headerSpacer: {
-    width: 44,
+    width: 40,
   },
 
-  // Creator Section
-  creatorSection: {
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
+  // Creator Card
   creatorCard: {
-    borderRadius: 22,
+    marginTop: 8,
+    borderRadius: 20,
     overflow: 'hidden',
   },
   creatorGradient: {
     padding: 20,
     borderWidth: 1,
     borderColor: 'rgba(168, 85, 247, 0.2)',
-    borderRadius: 22,
+    borderRadius: 20,
   },
   creatorInfo: {
     flexDirection: 'row',
@@ -759,19 +743,18 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   creatorAvatar: {
-    marginRight: 14,
-  },
-  creatorAvatarGradient: {
-    width: 52,
-    height: 52,
-    borderRadius: 18,
+    width: 50,
+    height: 50,
+    borderRadius: 16,
+    backgroundColor: '#a855f7',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 14,
   },
   creatorAvatarText: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#ffffff',
+    color: '#fff',
   },
   creatorDetails: {
     flex: 1,
@@ -790,9 +773,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
   },
   statusDot: {
     width: 8,
@@ -805,211 +788,230 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Prediction Section
-  predictionSection: {
-    paddingHorizontal: 24,
-    paddingVertical: 16,
+  // Title Section
+  titleSection: {
+    marginTop: 20,
+    marginBottom: 16,
   },
   predictionTitle: {
     fontSize: 26,
     fontWeight: '700',
     color: '#f8fafc',
     letterSpacing: -0.3,
-    marginBottom: 8,
   },
   predictionDesc: {
     fontSize: 15,
     color: '#64748b',
+    marginTop: 8,
     lineHeight: 22,
   },
 
-  // Info Cards
-  infoCards: {
-    flexDirection: 'row',
-    paddingHorizontal: 24,
-    gap: 12,
+  // Section Title
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#94a3b8',
     marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  infoCard: {
-    flex: 1,
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
-  infoCardGradient: {
-    padding: 18,
+
+  // Progress Card
+  progressCard: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 20,
+    padding: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    borderRadius: 18,
+    borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: 16,
+  },
+  progressStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 16,
+  },
+  progressStatItem: {
     alignItems: 'center',
   },
-  infoCardLabel: {
+  progressStatValue: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#10b981',
+  },
+  progressStatLabel: {
     fontSize: 12,
     color: '#64748b',
-    fontWeight: '500',
-    marginTop: 10,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    marginTop: 4,
   },
-  infoCardValue: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#f8fafc',
+  progressStatDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
-  infoCardValueExpired: {
-    color: '#ef4444',
-  },
-
-  // Stake Card
-  stakeCard: {
-    marginHorizontal: 24,
-    marginBottom: 24,
-    borderRadius: 18,
+  progressBar: {
+    height: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 4,
+    position: 'relative',
     overflow: 'hidden',
+    marginBottom: 12,
   },
-  stakeGradient: {
+  progressBarFill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    height: '100%',
+    backgroundColor: '#10b981',
+    borderRadius: 4,
+  },
+  progressBarMissed: {
+    position: 'absolute',
+    top: 0,
+    height: '100%',
+    backgroundColor: '#ef4444',
+    borderRadius: 4,
+  },
+  rewardRow: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  rewardItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(168, 85, 247, 0.2)',
-    borderRadius: 18,
+    gap: 6,
   },
-  stakeIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: 'rgba(168, 85, 247, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 16,
-  },
-  stakeContent: {
-    flex: 1,
-  },
-  stakeLabel: {
+  rewardText: {
     fontSize: 13,
-    color: '#64748b',
-    fontWeight: '500',
-  },
-  stakeValue: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#c084fc',
-    marginTop: 2,
+    color: '#94a3b8',
   },
 
-  // Check-ins Section
-  checkInsSection: {
-    paddingHorizontal: 24,
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64748b',
-    marginBottom: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  emptyCheckIns: {
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
-  emptyCheckInsGradient: {
-    alignItems: 'center',
-    padding: 32,
+  // Reward Card
+  rewardCard: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 20,
+    padding: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    borderRadius: 18,
+    borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: 16,
   },
-  emptyCheckInsText: {
+  rewardSplit: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  rewardSplitItem: {
+    alignItems: 'center',
+  },
+  rewardSplitLabel: {
+    fontSize: 12,
+    color: '#64748b',
+    marginBottom: 4,
+  },
+  rewardSplitValue: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#10b981',
+  },
+
+  // Checkins Section
+  checkinsSection: {
+    marginBottom: 16,
+  },
+  emptyCheckins: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 16,
+    padding: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  emptyCheckinsText: {
     fontSize: 14,
     color: '#52525b',
     marginTop: 12,
   },
-  checkInCard: {
-    marginBottom: 10,
+  checkinCard: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
     borderRadius: 16,
-    overflow: 'hidden',
-  },
-  checkInGradient: {
-    flexDirection: 'row',
     padding: 16,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    borderRadius: 16,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
-  checkInNumber: {
+  checkinHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  checkinIndex: {
     width: 32,
     height: 32,
     borderRadius: 10,
     backgroundColor: 'rgba(168, 85, 247, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 14,
+    marginRight: 12,
   },
-  checkInNumberText: {
+  checkinIndexText: {
     fontSize: 12,
     fontWeight: '600',
     color: '#c084fc',
   },
-  checkInContent: {
+  checkinMeta: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  checkInText: {
+  checkinDate: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  checkinPointBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    gap: 4,
+  },
+  checkinPointText: {
+    fontSize: 11,
+    color: '#10b981',
+    fontWeight: '500',
+  },
+  checkinContent: {
     fontSize: 15,
     color: '#f8fafc',
-    lineHeight: 21,
+    lineHeight: 22,
   },
-  checkInDate: {
-    fontSize: 12,
-    color: '#52525b',
-    marginTop: 8,
+  checkinImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 12,
+    marginTop: 12,
   },
 
-  // Voting Section
-  votingSection: {
-    paddingHorizontal: 24,
-    marginBottom: 24,
-  },
-  votingCard: {
+  // Voting Result Card
+  votingResultCard: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
     borderRadius: 20,
-    overflow: 'hidden',
-  },
-  votingGradient: {
     padding: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 20,
+    borderColor: 'rgba(255,255,255,0.08)',
+    marginBottom: 16,
   },
   votingRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'space-around',
   },
   voteItem: {
-    flex: 1,
     alignItems: 'center',
-  },
-  voteIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  voteIconSuccess: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-  },
-  voteIconFail: {
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
   },
   voteLabel: {
     fontSize: 13,
     color: '#64748b',
-    fontWeight: '500',
+    marginTop: 8,
     marginBottom: 4,
   },
   voteCount: {
@@ -1020,85 +1022,56 @@ const styles = StyleSheet.create({
   voteDivider: {
     width: 1,
     height: 60,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    marginHorizontal: 16,
-  },
-  voteProgressTrack: {
-    height: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    borderRadius: 4,
-    flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  voteProgressBar: {
-    height: 8,
-  },
-  voteProgressSuccess: {
-    backgroundColor: '#10b981',
-  },
-  voteProgressFail: {
-    backgroundColor: '#ef4444',
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
 
   // Action Section
   actionSection: {
-    paddingHorizontal: 24,
+    marginTop: 8,
   },
-  actionButton: {
+  joinButton: {
     borderRadius: 18,
     overflow: 'hidden',
   },
-  actionButtonGradient: {
+  joinButtonGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 18,
+    gap: 10,
   },
-  actionButtonText: {
+  joinButtonText: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#ffffff',
-  },
-  statusCard: {
-    borderRadius: 20,
-    overflow: 'hidden',
-  },
-  statusCardGradient: {
-    alignItems: 'center',
-    padding: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 20,
-  },
-  statusCardIcon: {
-    marginBottom: 12,
-  },
-  statusCardTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#f8fafc',
-    marginBottom: 6,
-  },
-  statusCardDesc: {
-    fontSize: 14,
-    color: '#64748b',
-    textAlign: 'center',
+    color: '#fff',
   },
 
-  // Voting Buttons
-  votingButtons: {
+  // Voting Section
+  votingSection: {
     alignItems: 'center',
   },
   votingPrompt: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '600',
     color: '#f8fafc',
-    marginBottom: 20,
     textAlign: 'center',
+    marginBottom: 16,
+  },
+  commentInput: {
+    width: '100%',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 14,
+    padding: 14,
+    color: '#fff',
+    fontSize: 15,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   voteButtonsRow: {
     flexDirection: 'row',
     gap: 14,
+    width: '100%',
   },
   voteButton: {
     flex: 1,
@@ -1110,12 +1083,40 @@ const styles = StyleSheet.create({
   voteButtonGradient: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 22,
+    paddingVertical: 24,
   },
   voteButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#ffffff',
-    marginTop: 6,
+    color: '#fff',
+    marginTop: 8,
+  },
+
+  // Status Card
+  statusCard: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 20,
+    padding: 32,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  statusCardTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#f8fafc',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  statusCardComment: {
+    fontSize: 14,
+    color: '#94a3b8',
+    fontStyle: 'italic',
+    marginBottom: 8,
+  },
+  statusCardDesc: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
   },
 });

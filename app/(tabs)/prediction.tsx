@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,40 +18,73 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import Slider from '@react-native-community/slider';
 import Toast from 'react-native-toast-message';
 import { useUserStore } from '@/stores/useUserStore';
+import { usePredictionStore } from '@/stores/usePredictionStore';
 import { createPrediction } from '@/services/prediction.service';
-import { STAKE, QUICK_DEADLINES } from '@/lib/constants';
-import { formatCredits, addDays, addHours } from '@/lib/utils';
+import { formatCredits, addDays } from '@/lib/utils';
+
+// 常量
+const STAKE = {
+  MIN: 50,
+  MAX: 10000,
+  DEFAULT: 100,
+};
+
+const CHECKIN_POINTS = {
+  MIN: 1,
+  MAX: 30,
+  DEFAULT: 7,
+};
 
 export default function CreatePredictionScreen() {
   const router = useRouter();
-  const { user, currentPrediction, recovery, fetchCurrentPrediction, fetchUser } = useUserStore();
+  const { user, fetchUser } = useUserStore();
+  const { currentPrediction, fetchCurrentPrediction } = usePredictionStore();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [deadline, setDeadline] = useState<Date>(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow;
-  });
+  const [deadline, setDeadline] = useState<Date>(() => addDays(new Date(), 7));
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
   const [stake, setStake] = useState(STAKE.DEFAULT);
   const [stakeInput, setStakeInput] = useState(STAKE.DEFAULT.toString());
+  const [checkinPointCount, setCheckinPointCount] = useState(CHECKIN_POINTS.DEFAULT);
   const [isLoading, setIsLoading] = useState(false);
   const [titleFocused, setTitleFocused] = useState(false);
   const [descFocused, setDescFocused] = useState(false);
 
-  const isInRecovery = recovery && recovery.status === 'IN_PROGRESS';
-  const hasActivePrediction = !!currentPrediction;
-  const maxStake = Math.min(user?.credit_balance || 0, STAKE.MAX);
-  const canCreate = !hasActivePrediction && (isInRecovery || (user?.credit_balance || 0) >= STAKE.MIN);
+  const hasActivePrediction = currentPrediction && 
+    (currentPrediction.status === 'active' || currentPrediction.status === 'judging');
+  const maxStake = Math.min(user?.credits || 0, STAKE.MAX);
+  const canCreate = !hasActivePrediction && (user?.credits || 0) >= STAKE.MIN;
 
-  // Quick deadline options
+  // 初始化
+  useEffect(() => {
+    fetchCurrentPrediction();
+  }, []);
+
+  // 快速截止日期选项
   const quickOptions = useMemo(() => [
-    { label: '1 Day', value: addDays(new Date(), 1), icon: '⚡' },
-    { label: '7 Days', value: addDays(new Date(), 7), icon: '📅' },
-    { label: '1 Month', value: addDays(new Date(), 30), icon: '🗓️' },
+    { label: '7天', value: addDays(new Date(), 7), icon: '⚡' },
+    { label: '14天', value: addDays(new Date(), 14), icon: '📅' },
+    { label: '30天', value: addDays(new Date(), 30), icon: '🗓️' },
   ], []);
+
+  // 计算边际递减奖励预览
+  const rewardPreview = useMemo(() => {
+    const checkinReward = Math.floor(stake / 2);
+    const resultReward = stake - checkinReward;
+    
+    // 边际递减：第 n 个打卡点获得 (N - n + 1) 份基础奖励
+    const totalUnits = (checkinPointCount * (checkinPointCount + 1)) / 2;
+    const baseUnit = checkinReward / totalUnits;
+    
+    const rewards = [];
+    for (let i = 1; i <= checkinPointCount; i++) {
+      const units = checkinPointCount - i + 1;
+      rewards.push(Math.round(baseUnit * units));
+    }
+    
+    return { checkinReward, resultReward, rewards };
+  }, [stake, checkinPointCount]);
 
   const handleStakeChange = (value: number) => {
     const roundedValue = Math.round(value);
@@ -83,38 +116,24 @@ export default function CreatePredictionScreen() {
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(false);
-    if (selectedDate) {
-      const newDeadline = new Date(deadline);
-      newDeadline.setFullYear(selectedDate.getFullYear());
-      newDeadline.setMonth(selectedDate.getMonth());
-      newDeadline.setDate(selectedDate.getDate());
-      setDeadline(newDeadline);
-    }
-  };
-
-  const handleTimeChange = (event: any, selectedTime?: Date) => {
-    setShowTimePicker(false);
-    if (selectedTime) {
-      const newDeadline = new Date(deadline);
-      newDeadline.setHours(selectedTime.getHours());
-      newDeadline.setMinutes(selectedTime.getMinutes());
-      setDeadline(newDeadline);
+    if (selectedDate && selectedDate > new Date()) {
+      setDeadline(selectedDate);
     }
   };
 
   const handleCreate = async () => {
     if (!title.trim()) {
-      Toast.show({ type: 'error', text1: 'Please enter a prediction title' });
+      Toast.show({ type: 'error', text1: '请输入预测标题' });
       return;
     }
 
     if (deadline <= new Date()) {
-      Toast.show({ type: 'error', text1: 'Deadline must be in the future' });
+      Toast.show({ type: 'error', text1: '截止日期必须在未来' });
       return;
     }
 
-    if (!isInRecovery && stake > (user?.credit_balance || 0)) {
-      Toast.show({ type: 'error', text1: 'Insufficient credits' });
+    if (stake > (user?.credits || 0)) {
+      Toast.show({ type: 'error', text1: '积分不足' });
       return;
     }
 
@@ -123,24 +142,24 @@ export default function CreatePredictionScreen() {
       const prediction = await createPrediction({
         title: title.trim(),
         description: description.trim() || undefined,
-        deadline: deadline.toISOString(),
-        stake: isInRecovery ? 0 : stake,
-        isRecovery: isInRecovery ?? false,
+        deadline,
+        total_stake: stake,
+        checkin_point_count: checkinPointCount,
       });
 
       await Promise.all([fetchCurrentPrediction(), fetchUser()]);
 
       Toast.show({
         type: 'success',
-        text1: 'Prediction created!',
-        text2: isInRecovery ? 'Continue your recovery journey' : `${stake} credits staked`,
+        text1: '预测创建成功！',
+        text2: `已押注 ${stake} 积分，${checkinPointCount} 个打卡点`,
       });
 
       router.replace(`/(screens)/prediction/${prediction.id}`);
     } catch (error: any) {
       Toast.show({
         type: 'error',
-        text1: 'Failed to create prediction',
+        text1: '创建失败',
         text2: error.message,
       });
     } finally {
@@ -148,6 +167,7 @@ export default function CreatePredictionScreen() {
     }
   };
 
+  // 如果已有进行中的预测，显示提示
   if (hasActivePrediction) {
     return (
       <View style={styles.container}>
@@ -156,31 +176,31 @@ export default function CreatePredictionScreen() {
           style={styles.bgGradient}
         />
         <SafeAreaView style={styles.safeArea} edges={['top']}>
-          <View style={styles.errorContainer}>
-            <View style={styles.errorIconContainer}>
+          <View style={styles.existingContainer}>
+            <View style={styles.existingIconContainer}>
               <LinearGradient
                 colors={['rgba(245, 158, 11, 0.2)', 'rgba(245, 158, 11, 0.1)']}
-                style={styles.errorIconGradient}
+                style={styles.existingIconGradient}
               >
                 <Ionicons name="flag" size={44} color="#f59e0b" />
               </LinearGradient>
             </View>
-            <Text style={styles.errorTitle}>Active Prediction Exists</Text>
-            <Text style={styles.errorDesc}>
-              You can only have one active prediction at a time. Complete or cancel your current prediction first.
+            <Text style={styles.existingTitle}>已有进行中的预测</Text>
+            <Text style={styles.existingDesc}>
+              同一时间只能有一个进行中的预测。请先完成或取消当前预测。
             </Text>
             <TouchableOpacity
-              onPress={() => router.push(`/(screens)/prediction/${currentPrediction.id}`)}
-              style={styles.errorButton}
+              onPress={() => router.push(`/(screens)/prediction/${currentPrediction!.id}`)}
+              style={styles.existingButton}
               activeOpacity={0.85}
             >
               <LinearGradient
                 colors={['#c084fc', '#a855f7', '#9333ea']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={styles.errorButtonGradient}
+                style={styles.existingButtonGradient}
               >
-                <Text style={styles.errorButtonText}>View Current Prediction</Text>
+                <Text style={styles.existingButtonText}>查看当前预测</Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -216,35 +236,16 @@ export default function CreatePredictionScreen() {
           >
             {/* Header */}
             <View style={styles.header}>
-              <Text style={styles.headerTitle}>
-                {isInRecovery ? 'Recovery Prediction' : 'Create Prediction'}
-              </Text>
+              <Text style={styles.headerTitle}>创建预测</Text>
               <Text style={styles.headerSubtitle}>
-                {isInRecovery
-                  ? `Need ${2 - (recovery.success_count || 0)} more successes to recover ${formatCredits(recovery.original_stake)} credits`
-                  : 'Predict your behavior and stake your commitment'}
+                设定目标，押注承诺，让朋友监督你完成
               </Text>
             </View>
-
-            {/* Recovery Banner */}
-            {isInRecovery && (
-              <View style={styles.recoveryBanner}>
-                <LinearGradient
-                  colors={['rgba(245, 158, 11, 0.12)', 'rgba(245, 158, 11, 0.05)']}
-                  style={styles.recoveryGradient}
-                >
-                  <View style={styles.recoveryIconContainer}>
-                    <Ionicons name="refresh" size={18} color="#f59e0b" />
-                  </View>
-                  <Text style={styles.recoveryText}>No stake required in Recovery Mode</Text>
-                </LinearGradient>
-              </View>
-            )}
 
             {/* Title Input */}
             <View style={styles.inputSection}>
               <Text style={styles.inputLabel}>
-                Prediction Title <Text style={styles.required}>*</Text>
+                预测标题 <Text style={styles.required}>*</Text>
               </Text>
               <View style={[
                 styles.inputContainer,
@@ -253,7 +254,7 @@ export default function CreatePredictionScreen() {
                 <TextInput
                   value={title}
                   onChangeText={setTitle}
-                  placeholder="What will you achieve?"
+                  placeholder="例如：每天运动30分钟"
                   placeholderTextColor="#52525b"
                   style={styles.textInput}
                   maxLength={100}
@@ -266,7 +267,7 @@ export default function CreatePredictionScreen() {
             {/* Description Input */}
             <View style={styles.inputSection}>
               <Text style={styles.inputLabel}>
-                Description <Text style={styles.optional}>(optional)</Text>
+                描述 <Text style={styles.optional}>(可选)</Text>
               </Text>
               <View style={[
                 styles.inputContainer,
@@ -276,7 +277,7 @@ export default function CreatePredictionScreen() {
                 <TextInput
                   value={description}
                   onChangeText={setDescription}
-                  placeholder="Add more details about your prediction..."
+                  placeholder="添加更多细节..."
                   placeholderTextColor="#52525b"
                   style={[styles.textInput, styles.textArea]}
                   multiline
@@ -292,7 +293,7 @@ export default function CreatePredictionScreen() {
             {/* Deadline Section */}
             <View style={styles.inputSection}>
               <Text style={styles.inputLabel}>
-                Deadline <Text style={styles.required}>*</Text>
+                截止日期 <Text style={styles.required}>*</Text>
               </Text>
 
               {/* Quick Options */}
@@ -301,53 +302,34 @@ export default function CreatePredictionScreen() {
                   <TouchableOpacity
                     key={option.label}
                     onPress={() => setDeadline(option.value)}
-                    style={styles.quickOption}
+                    style={[
+                      styles.quickOption,
+                      deadline.toDateString() === option.value.toDateString() && styles.quickOptionActive,
+                    ]}
                     activeOpacity={0.8}
                   >
-                    <LinearGradient
-                      colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-                      style={styles.quickOptionGradient}
-                    >
-                      <Text style={styles.quickOptionIcon}>{option.icon}</Text>
-                      <Text style={styles.quickOptionText}>{option.label}</Text>
-                    </LinearGradient>
+                    <Text style={styles.quickOptionIcon}>{option.icon}</Text>
+                    <Text style={[
+                      styles.quickOptionText,
+                      deadline.toDateString() === option.value.toDateString() && styles.quickOptionTextActive,
+                    ]}>
+                      {option.label}
+                    </Text>
                   </TouchableOpacity>
                 ))}
               </View>
 
-              {/* Date & Time Picker */}
-              <View style={styles.dateTimeRow}>
-                <TouchableOpacity
-                  onPress={() => setShowDatePicker(true)}
-                  style={styles.dateTimeButton}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-                    style={styles.dateTimeGradient}
-                  >
-                    <Ionicons name="calendar-outline" size={20} color="#64748b" />
-                    <Text style={styles.dateTimeText}>
-                      {deadline.toLocaleDateString()}
-                    </Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => setShowTimePicker(true)}
-                  style={styles.dateTimeButton}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-                    style={styles.dateTimeGradient}
-                  >
-                    <Ionicons name="time-outline" size={20} color="#64748b" />
-                    <Text style={styles.dateTimeText}>
-                      {deadline.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              </View>
+              {/* Date Picker */}
+              <TouchableOpacity
+                onPress={() => setShowDatePicker(true)}
+                style={styles.dateButton}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="calendar-outline" size={20} color="#64748b" />
+                <Text style={styles.dateText}>
+                  {deadline.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })}
+                </Text>
+              </TouchableOpacity>
 
               {showDatePicker && (
                 <DateTimePicker
@@ -358,91 +340,129 @@ export default function CreatePredictionScreen() {
                   minimumDate={new Date()}
                 />
               )}
-              {showTimePicker && (
-                <DateTimePicker
-                  value={deadline}
-                  mode="time"
-                  display="default"
-                  onChange={handleTimeChange}
+            </View>
+
+            {/* Checkin Points Section */}
+            <View style={styles.inputSection}>
+              <Text style={styles.inputLabel}>
+                打卡点数量 <Text style={styles.required}>*</Text>
+              </Text>
+              <Text style={styles.inputHint}>
+                越早的打卡点奖励越高，错过损失也越大
+              </Text>
+
+              <View style={styles.pointsCard}>
+                <View style={styles.pointsDisplay}>
+                  <Text style={styles.pointsValue}>{checkinPointCount}</Text>
+                  <Text style={styles.pointsUnit}>个打卡点</Text>
+                </View>
+                <Slider
+                  value={checkinPointCount}
+                  onValueChange={(v) => setCheckinPointCount(Math.round(v))}
+                  minimumValue={CHECKIN_POINTS.MIN}
+                  maximumValue={CHECKIN_POINTS.MAX}
+                  step={1}
+                  minimumTrackTintColor="#06b6d4"
+                  maximumTrackTintColor="rgba(255, 255, 255, 0.1)"
+                  thumbTintColor="#22d3ee"
                 />
-              )}
+                <View style={styles.sliderLabels}>
+                  <Text style={styles.sliderLabel}>{CHECKIN_POINTS.MIN}</Text>
+                  <Text style={styles.sliderLabel}>{CHECKIN_POINTS.MAX}</Text>
+                </View>
+              </View>
+
+              {/* Reward Preview */}
+              <View style={styles.rewardPreview}>
+                <Text style={styles.rewardPreviewTitle}>奖励预览（边际递减）</Text>
+                <View style={styles.rewardBars}>
+                  {rewardPreview.rewards.slice(0, 5).map((reward, index) => (
+                    <View key={index} style={styles.rewardBarItem}>
+                      <View 
+                        style={[
+                          styles.rewardBar, 
+                          { height: Math.max(20, (reward / rewardPreview.rewards[0]) * 60) }
+                        ]} 
+                      />
+                      <Text style={styles.rewardBarLabel}>#{index + 1}</Text>
+                      <Text style={styles.rewardBarValue}>{reward}</Text>
+                    </View>
+                  ))}
+                  {checkinPointCount > 5 && (
+                    <View style={styles.rewardBarItem}>
+                      <Text style={styles.rewardMoreText}>...</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
             </View>
 
             {/* Stake Section */}
-            {!isInRecovery && (
-              <View style={styles.inputSection}>
-                <View style={styles.stakeLabelRow}>
-                  <Text style={styles.inputLabel}>
-                    Stake Credits <Text style={styles.required}>*</Text>
-                  </Text>
-                  <Text style={styles.availableCredits}>
-                    Available: {formatCredits(user?.credit_balance || 0)}
-                  </Text>
-                </View>
+            <View style={styles.inputSection}>
+              <View style={styles.stakeLabelRow}>
+                <Text style={styles.inputLabel}>
+                  押注积分 <Text style={styles.required}>*</Text>
+                </Text>
+                <Text style={styles.availableCredits}>
+                  可用: {formatCredits(user?.credits || 0)}
+                </Text>
+              </View>
 
-                {/* Stake Display Card */}
-                <View style={styles.stakeCard}>
-                  <LinearGradient
-                    colors={['rgba(168, 85, 247, 0.1)', 'rgba(168, 85, 247, 0.03)']}
-                    style={styles.stakeCardGradient}
-                  >
-                    <View style={styles.stakeInputRow}>
-                      <TextInput
-                        value={stakeInput}
-                        onChangeText={handleStakeInputChange}
-                        onBlur={handleStakeInputBlur}
-                        keyboardType="number-pad"
-                        style={styles.stakeInput}
-                      />
-                      <Text style={styles.stakeUnit}>credits</Text>
-                    </View>
-                  </LinearGradient>
-                </View>
-
-                {/* Slider */}
-                <View style={styles.sliderContainer}>
-                  <Slider
-                    value={stake}
-                    onValueChange={handleStakeChange}
-                    minimumValue={STAKE.MIN}
-                    maximumValue={maxStake || STAKE.MIN}
-                    step={10}
-                    minimumTrackTintColor="#a855f7"
-                    maximumTrackTintColor="rgba(255, 255, 255, 0.1)"
-                    thumbTintColor="#c084fc"
-                    disabled={maxStake < STAKE.MIN}
+              <View style={styles.stakeCard}>
+                <View style={styles.stakeInputRow}>
+                  <TextInput
+                    value={stakeInput}
+                    onChangeText={handleStakeInputChange}
+                    onBlur={handleStakeInputBlur}
+                    keyboardType="number-pad"
+                    style={styles.stakeInput}
                   />
-                  <View style={styles.sliderLabels}>
-                    <Text style={styles.sliderLabel}>{STAKE.MIN}</Text>
-                    <Text style={styles.sliderLabel}>{formatCredits(maxStake)}</Text>
-                  </View>
+                  <Text style={styles.stakeUnit}>积分</Text>
+                </View>
+                <Slider
+                  value={stake}
+                  onValueChange={handleStakeChange}
+                  minimumValue={STAKE.MIN}
+                  maximumValue={maxStake || STAKE.MIN}
+                  step={10}
+                  minimumTrackTintColor="#a855f7"
+                  maximumTrackTintColor="rgba(255, 255, 255, 0.1)"
+                  thumbTintColor="#c084fc"
+                  disabled={maxStake < STAKE.MIN}
+                />
+                <View style={styles.sliderLabels}>
+                  <Text style={styles.sliderLabel}>{STAKE.MIN}</Text>
+                  <Text style={styles.sliderLabel}>{formatCredits(maxStake)}</Text>
                 </View>
               </View>
-            )}
 
-            {/* Risk Warning */}
-            <View style={styles.warningCard}>
-              <LinearGradient
-                colors={['rgba(245, 158, 11, 0.1)', 'rgba(245, 158, 11, 0.03)']}
-                style={styles.warningGradient}
-              >
-                <View style={styles.warningIconContainer}>
-                  <Ionicons name="alert-circle" size={20} color="#f59e0b" />
+              {/* Stake Distribution */}
+              <View style={styles.stakeDistribution}>
+                <View style={styles.stakeDistItem}>
+                  <View style={[styles.stakeDistDot, { backgroundColor: '#06b6d4' }]} />
+                  <Text style={styles.stakeDistLabel}>打卡奖励 (50%)</Text>
+                  <Text style={styles.stakeDistValue}>{rewardPreview.checkinReward}</Text>
                 </View>
-                <View style={styles.warningContent}>
-                  <Text style={styles.warningTitle}>Risk Warning</Text>
-                  <Text style={styles.warningText}>
-                    {isInRecovery
-                      ? 'If you fail this prediction, your original stake will be forfeited to the platform.'
-                      : "If you fail this prediction, your stake will enter recovery mode. You'll need 2 consecutive successes to recover it, or the stake will be forfeited."}
-                  </Text>
+                <View style={styles.stakeDistItem}>
+                  <View style={[styles.stakeDistDot, { backgroundColor: '#a855f7' }]} />
+                  <Text style={styles.stakeDistLabel}>结果奖励 (50%)</Text>
+                  <Text style={styles.stakeDistValue}>{rewardPreview.resultReward}</Text>
                 </View>
-              </LinearGradient>
+              </View>
             </View>
-          </ScrollView>
 
-          {/* Create Button */}
-          <View style={styles.bottomContainer}>
+            {/* Warning */}
+            <View style={styles.warningCard}>
+              <Ionicons name="alert-circle" size={20} color="#f59e0b" />
+              <View style={styles.warningContent}>
+                <Text style={styles.warningTitle}>风险提示</Text>
+                <Text style={styles.warningText}>
+                  错过打卡点将损失对应奖励；最终评审失败将损失结果奖励部分。
+                </Text>
+              </View>
+            </View>
+
+            {/* Create Button */}
             <TouchableOpacity
               onPress={handleCreate}
               disabled={isLoading || !canCreate}
@@ -464,13 +484,13 @@ export default function CreatePredictionScreen() {
                   <>
                     <Ionicons name="sparkles" size={20} color="#fff" style={{ marginRight: 8 }} />
                     <Text style={styles.createButtonText}>
-                      {isInRecovery ? 'Create Recovery Prediction' : `Stake ${formatCredits(stake)} Credits`}
+                      押注 {formatCredits(stake)} 积分
                     </Text>
                   </>
                 )}
               </LinearGradient>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </View>
@@ -523,12 +543,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 120,
+    paddingBottom: 100,
   },
-
-  // Header
   header: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 24,
   },
@@ -544,41 +562,8 @@ const styles = StyleSheet.create({
     color: '#64748b',
     lineHeight: 22,
   },
-
-  // Recovery Banner
-  recoveryBanner: {
-    marginHorizontal: 24,
-    marginBottom: 24,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  recoveryGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-    borderRadius: 16,
-  },
-  recoveryIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: 'rgba(245, 158, 11, 0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  recoveryText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#fbbf24',
-    fontWeight: '500',
-  },
-
-  // Input Sections
   inputSection: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     marginBottom: 24,
   },
   inputLabel: {
@@ -586,7 +571,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#94a3b8',
     marginBottom: 10,
-    marginLeft: 4,
+  },
+  inputHint: {
+    fontSize: 13,
+    color: '#52525b',
+    marginBottom: 12,
   },
   required: {
     color: '#ef4444',
@@ -599,7 +588,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.3)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 16,
+    borderRadius: 14,
   },
   inputContainerFocused: {
     borderColor: 'rgba(168, 85, 247, 0.5)',
@@ -617,8 +606,6 @@ const styles = StyleSheet.create({
     minHeight: 80,
     textAlignVertical: 'top',
   },
-
-  // Quick Options
   quickOptions: {
     flexDirection: 'row',
     gap: 10,
@@ -626,15 +613,16 @@ const styles = StyleSheet.create({
   },
   quickOption: {
     flex: 1,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  quickOptionGradient: {
     alignItems: 'center',
     paddingVertical: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 14,
+  },
+  quickOptionActive: {
+    borderColor: 'rgba(168, 85, 247, 0.5)',
+    backgroundColor: 'rgba(168, 85, 247, 0.1)',
   },
   quickOptionIcon: {
     fontSize: 18,
@@ -645,33 +633,87 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontWeight: '500',
   },
-
-  // Date Time
-  dateTimeRow: {
-    flexDirection: 'row',
-    gap: 12,
+  quickOptionTextActive: {
+    color: '#c084fc',
   },
-  dateTimeButton: {
-    flex: 1,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  dateTimeGradient: {
+  dateButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 14,
+    padding: 16,
   },
-  dateTimeText: {
+  dateText: {
     fontSize: 15,
     color: '#f8fafc',
     marginLeft: 10,
     fontWeight: '500',
   },
-
-  // Stake Section
+  pointsCard: {
+    backgroundColor: 'rgba(6, 182, 212, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.2)',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+  },
+  pointsDisplay: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  pointsValue: {
+    fontSize: 48,
+    fontWeight: '700',
+    color: '#22d3ee',
+  },
+  pointsUnit: {
+    fontSize: 16,
+    color: '#64748b',
+    marginLeft: 8,
+  },
+  rewardPreview: {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 12,
+    padding: 16,
+  },
+  rewardPreviewTitle: {
+    fontSize: 13,
+    color: '#64748b',
+    marginBottom: 12,
+  },
+  rewardBars: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-around',
+    height: 80,
+  },
+  rewardBarItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  rewardBar: {
+    width: 24,
+    backgroundColor: '#06b6d4',
+    borderRadius: 4,
+    marginBottom: 4,
+  },
+  rewardBarLabel: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  rewardBarValue: {
+    fontSize: 10,
+    color: '#22d3ee',
+    fontWeight: '600',
+  },
+  rewardMoreText: {
+    color: '#64748b',
+    fontSize: 16,
+  },
   stakeLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -683,20 +725,18 @@ const styles = StyleSheet.create({
     color: '#64748b',
   },
   stakeCard: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  stakeCardGradient: {
-    padding: 24,
+    backgroundColor: 'rgba(168, 85, 247, 0.08)',
     borderWidth: 1,
     borderColor: 'rgba(168, 85, 247, 0.2)',
-    borderRadius: 20,
-    alignItems: 'center',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
   },
   stakeInputRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
+    justifyContent: 'center',
+    marginBottom: 16,
   },
   stakeInput: {
     fontSize: 48,
@@ -704,16 +744,11 @@ const styles = StyleSheet.create({
     color: '#c084fc',
     minWidth: 100,
     textAlign: 'center',
-    letterSpacing: -1,
   },
   stakeUnit: {
-    fontSize: 18,
+    fontSize: 16,
     color: '#64748b',
     marginLeft: 8,
-    fontWeight: '500',
-  },
-  sliderContainer: {
-    paddingHorizontal: 4,
   },
   sliderLabels: {
     flexDirection: 'row',
@@ -724,34 +759,50 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#52525b',
   },
-
-  // Warning Card
-  warningCard: {
-    marginHorizontal: 24,
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
-  warningGradient: {
+  stakeDistribution: {
     flexDirection: 'row',
-    padding: 18,
+    gap: 12,
+  },
+  stakeDistItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 10,
+    padding: 12,
+  },
+  stakeDistDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  stakeDistLabel: {
+    flex: 1,
+    fontSize: 12,
+    color: '#64748b',
+  },
+  stakeDistValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#f8fafc',
+  },
+  warningCard: {
+    flexDirection: 'row',
+    marginHorizontal: 20,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
     borderWidth: 1,
     borderColor: 'rgba(245, 158, 11, 0.2)',
-    borderRadius: 18,
-  },
-  warningIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 24,
   },
   warningContent: {
     flex: 1,
+    marginLeft: 12,
   },
   warningTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     color: '#fbbf24',
     marginBottom: 4,
@@ -759,23 +810,11 @@ const styles = StyleSheet.create({
   warningText: {
     fontSize: 13,
     color: '#94a3b8',
-    lineHeight: 19,
-  },
-
-  // Bottom Container
-  bottomContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 24,
-    paddingBottom: 40,
-    backgroundColor: 'rgba(3, 7, 18, 0.95)',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    lineHeight: 18,
   },
   createButton: {
-    borderRadius: 18,
+    marginHorizontal: 20,
+    borderRadius: 16,
     overflow: 'hidden',
   },
   createButtonGradient: {
@@ -789,47 +828,45 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#ffffff',
   },
-
-  // Error State
-  errorContainer: {
+  existingContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
   },
-  errorIconContainer: {
+  existingIconContainer: {
     marginBottom: 24,
   },
-  errorIconGradient: {
+  existingIconGradient: {
     width: 100,
     height: 100,
     borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  errorTitle: {
+  existingTitle: {
     fontSize: 22,
     fontWeight: '700',
     color: '#f8fafc',
     marginBottom: 12,
     textAlign: 'center',
   },
-  errorDesc: {
+  existingDesc: {
     fontSize: 15,
     color: '#64748b',
     textAlign: 'center',
     marginBottom: 32,
     lineHeight: 22,
   },
-  errorButton: {
+  existingButton: {
     borderRadius: 16,
     overflow: 'hidden',
   },
-  errorButtonGradient: {
+  existingButtonGradient: {
     paddingVertical: 16,
     paddingHorizontal: 32,
   },
-  errorButtonText: {
+  existingButtonText: {
     fontSize: 16,
     fontWeight: '600',
     color: '#ffffff',

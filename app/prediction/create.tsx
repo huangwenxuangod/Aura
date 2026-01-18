@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   View, 
   Text, 
@@ -8,44 +8,75 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Slider from '@react-native-community/slider';
+import { Ionicons } from '@expo/vector-icons';
 import { useUserStore } from '@/stores/useUserStore';
 import { usePredictionStore } from '@/stores/usePredictionStore';
-import { predictionService } from '@/services/prediction.service';
-import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { useToast } from '@/hooks/useToast';
-import { formatCredit } from '@/lib/utils';
-import { STAKE_LIMITS } from '@/lib/constants';
+import { createPrediction } from '@/services/prediction.service';
+import { useRegionStore } from '@/stores/useRegionStore';
+import Toast from 'react-native-toast-message';
 
 // 快捷时间选项
 const QUICK_DEADLINES = [
-  { label: '1 Day', days: 1 },
-  { label: '7 Days', days: 7 },
-  { label: '1 Month', days: 30 },
+  { label: '1周', days: 7 },
+  { label: '1个月', days: 30 },
+  { label: '3个月', days: 90 },
 ];
 
-export default function CreatePredictionScreen() {
-  const insets = useSafeAreaInsets();
-  const toast = useToast();
-  const { user, recovery } = useUserStore();
-  const { fetchCurrentPrediction } = usePredictionStore();
+// 最小/最大押注
+const MIN_STAKE = 10;
+const MAX_STAKE = 1000;
 
+export default function CreatePredictionScreen() {
+  const { user } = useUserStore();
+  const { fetchCurrentPrediction } = usePredictionStore();
+  const { region } = useRegionStore();
+  const isChina = region === 'CN';
+
+  // 表单状态
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [deadline, setDeadline] = useState(new Date(Date.now() + 24 * 60 * 60 * 1000));
-  const [stake, setStake] = useState(10);
+  const [deadline, setDeadline] = useState(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)); // 默认1个月
+  const [stake, setStake] = useState(100);
+  const [checkinPointCount, setCheckinPointCount] = useState(2); // 默认2个打卡点
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [customStake, setCustomStake] = useState('');
 
-  const isRecoveryMode = user?.status === 'RECOVERY';
-  const maxStake = Math.min(user?.credit_balance || 0, STAKE_LIMITS.MAX_STAKE);
-  const minStake = STAKE_LIMITS.MIN_STAKE;
+  // 计算天数
+  const totalDays = useMemo(() => {
+    const diffTime = deadline.getTime() - Date.now();
+    return Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+  }, [deadline]);
+
+  // 最大打卡点数 = 天数
+  const maxCheckinPoints = totalDays;
+
+  // 确保打卡点数不超过天数
+  useMemo(() => {
+    if (checkinPointCount > maxCheckinPoints) {
+      setCheckinPointCount(Math.min(2, maxCheckinPoints));
+    }
+  }, [maxCheckinPoints]);
+
+  // 计算奖励分配
+  const checkinReward = Math.floor(stake / 2);
+  const resultReward = stake - checkinReward;
+
+  // 计算边际递减的打卡点奖励
+  const checkinPointRewards = useMemo(() => {
+    const n = checkinPointCount;
+    const sum = (n * (n + 1)) / 2;
+    const rewards: number[] = [];
+    
+    for (let i = 1; i <= n; i++) {
+      rewards.push(Math.round(checkinReward * (n - i + 1) / sum));
+    }
+    
+    return rewards;
+  }, [checkinPointCount, checkinReward]);
 
   // 处理快捷时间选择
   const handleQuickDeadline = (days: number) => {
@@ -57,24 +88,8 @@ export default function CreatePredictionScreen() {
   // 处理日期选择
   const handleDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(false);
-    if (selectedDate) {
+    if (selectedDate && selectedDate > new Date()) {
       setDeadline(selectedDate);
-    }
-  };
-
-  // 处理滑块变化
-  const handleSliderChange = (value: number) => {
-    const roundedValue = Math.round(value / 10) * 10;
-    setStake(roundedValue);
-    setCustomStake('');
-  };
-
-  // 处理自定义金额输入
-  const handleCustomStakeChange = (text: string) => {
-    setCustomStake(text);
-    const value = parseInt(text, 10);
-    if (!isNaN(value) && value >= minStake && value <= maxStake) {
-      setStake(value);
     }
   };
 
@@ -82,130 +97,113 @@ export default function CreatePredictionScreen() {
   const handleCreate = async () => {
     // 验证
     if (!title.trim()) {
-      toast.error('Please enter a prediction title');
+      Toast.show({ type: 'error', text1: isChina ? '请输入目标标题' : 'Please enter a title' });
       return;
     }
 
-    if (deadline <= new Date()) {
-      toast.error('Deadline must be in the future');
+    if (title.trim().length < 5) {
+      Toast.show({ type: 'error', text1: isChina ? '标题至少5个字' : 'Title must be at least 5 characters' });
       return;
     }
 
-    if (!isRecoveryMode && stake < minStake) {
-      toast.error(`Minimum stake is ${formatCredit(minStake)}`);
-      return;
-    }
-
-    if (!isRecoveryMode && stake > maxStake) {
-      toast.error(`Maximum stake is ${formatCredit(maxStake)}`);
+    if (stake > (user?.credits || 0)) {
+      Toast.show({ type: 'error', text1: isChina ? '积分不足' : 'Insufficient credits' });
       return;
     }
 
     setIsLoading(true);
 
     try {
-      await predictionService.create(
-        {
-          title: title.trim(),
-          description: description.trim() || undefined,
-          deadline: deadline.toISOString(),
-          stake: isRecoveryMode ? 0 : stake,
-        },
-        isRecoveryMode ? recovery?.id : undefined
-      );
+      await createPrediction({
+        title: title.trim(),
+        description: description.trim() || undefined,
+        deadline: deadline,
+        total_stake: stake,
+        checkin_point_count: checkinPointCount,
+      });
 
       await fetchCurrentPrediction();
-      toast.success('Prediction created!');
+      Toast.show({ type: 'success', text1: isChina ? '预测创建成功！' : 'Prediction created!' });
       router.back();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create prediction');
+      Toast.show({ 
+        type: 'error', 
+        text1: isChina ? '创建失败' : 'Failed to create',
+        text2: error instanceof Error ? error.message : 'Unknown error',
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
-  // 格式化截止时间显示
+  // 格式化截止时间
   const formatDeadline = () => {
-    const options: Intl.DateTimeFormatOptions = {
+    return deadline.toLocaleDateString(isChina ? 'zh-CN' : 'en-US', {
+      year: 'numeric',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    };
-    return deadline.toLocaleDateString('en-US', options);
+    });
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      className="flex-1 bg-black"
-    >
-      <View className="flex-1">
+    <SafeAreaView className="flex-1 bg-[#030712]" edges={['top']}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        className="flex-1"
+      >
         {/* Header */}
-        <View 
-          className="flex-row items-center justify-between px-4 py-3 border-b border-zinc-800"
-          style={{ paddingTop: insets.top + 8 }}
-        >
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text className="text-violet-500 text-base">Cancel</Text>
+        <View className="flex-row items-center justify-between px-4 py-3 border-b border-white/10">
+          <TouchableOpacity onPress={() => router.back()} className="p-2 -ml-2">
+            <Ionicons name="close" size={24} color="#a855f7" />
           </TouchableOpacity>
           <Text className="text-white text-lg font-semibold">
-            {isRecoveryMode ? 'Recovery Prediction' : 'New Prediction'}
+            {isChina ? '创建预测' : 'New Prediction'}
           </Text>
-          <View className="w-16" />
+          <View className="w-10" />
         </View>
 
         <ScrollView
-          contentContainerStyle={{
-            paddingHorizontal: 16,
-            paddingBottom: insets.bottom + 100,
-          }}
+          className="flex-1"
+          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Recovery Mode Banner */}
-          {isRecoveryMode && (
-            <Card variant="outlined" className="mt-4 border-amber-500/50 bg-amber-500/10">
-              <View className="flex-row items-center">
-                <Text className="text-2xl mr-3">🔄</Text>
-                <View className="flex-1">
-                  <Text className="text-amber-500 font-semibold">Recovery Mode</Text>
-                  <Text className="text-zinc-400 text-sm">
-                    Complete this to progress ({recovery?.consecutive_successes || 0}/2)
-                  </Text>
-                </View>
-              </View>
-            </Card>
-          )}
-
           {/* 标题输入 */}
-          <View className="mt-6">
-            <Text className="text-white text-lg font-semibold mb-3">What will you achieve?</Text>
-            <Input
-              placeholder="e.g., Run 5km every morning"
+          <View className="mb-6">
+            <Text className="text-white text-base font-semibold mb-2">
+              {isChina ? '你要完成什么目标？' : 'What will you achieve?'}
+            </Text>
+            <TextInput
+              className="bg-white/5 border border-white/10 rounded-2xl px-4 py-4 text-white text-base"
+              placeholder={isChina ? '例如：3个月减重10斤' : 'e.g., Lose 10kg in 3 months'}
+              placeholderTextColor="#64748b"
               value={title}
               onChangeText={setTitle}
-              maxLength={100}
+              maxLength={50}
             />
           </View>
 
           {/* 描述输入 */}
           <View className="mb-6">
-            <Text className="text-zinc-400 text-sm mb-2">Description (optional)</Text>
+            <Text className="text-zinc-400 text-sm mb-2">
+              {isChina ? '详细描述（可选）' : 'Description (optional)'}
+            </Text>
             <TextInput
-              className="bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-white text-base min-h-[80px]"
-              placeholder="Add more details..."
-              placeholderTextColor="#71717a"
+              className="bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-white text-base min-h-[80px]"
+              placeholder={isChina ? '添加更多细节...' : 'Add more details...'}
+              placeholderTextColor="#64748b"
               value={description}
               onChangeText={setDescription}
               multiline
-              maxLength={500}
+              maxLength={200}
               textAlignVertical="top"
             />
           </View>
 
           {/* 截止时间 */}
           <View className="mb-6">
-            <Text className="text-white text-lg font-semibold mb-3">Deadline</Text>
+            <Text className="text-white text-base font-semibold mb-3">
+              {isChina ? '截止日期' : 'Deadline'}
+            </Text>
             
             {/* 快捷选项 */}
             <View className="flex-row mb-4">
@@ -213,119 +211,218 @@ export default function CreatePredictionScreen() {
                 <TouchableOpacity
                   key={option.days}
                   onPress={() => handleQuickDeadline(option.days)}
-                  className="bg-zinc-800 px-4 py-2 rounded-lg mr-2"
+                  className={`px-4 py-2 rounded-xl mr-3 ${
+                    totalDays === option.days 
+                      ? 'bg-violet-600' 
+                      : 'bg-white/5 border border-white/10'
+                  }`}
                 >
-                  <Text className="text-white text-sm">{option.label}</Text>
+                  <Text className={totalDays === option.days ? 'text-white font-medium' : 'text-zinc-400'}>
+                    {option.label}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
 
-            {/* 日期选择器触发 */}
+            {/* 日期显示 */}
             <TouchableOpacity
               onPress={() => setShowDatePicker(true)}
-              className="bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-4"
+              className="bg-white/5 border border-white/10 rounded-2xl px-4 py-4 flex-row items-center justify-between"
             >
               <Text className="text-white text-base">{formatDeadline()}</Text>
+              <View className="flex-row items-center">
+                <Text className="text-violet-400 text-sm mr-2">{totalDays} {isChina ? '天' : 'days'}</Text>
+                <Ionicons name="calendar-outline" size={20} color="#a855f7" />
+              </View>
             </TouchableOpacity>
 
             {showDatePicker && (
               <DateTimePicker
                 value={deadline}
-                mode="datetime"
+                mode="date"
                 display="spinner"
                 onChange={handleDateChange}
-                minimumDate={new Date()}
+                minimumDate={new Date(Date.now() + 24 * 60 * 60 * 1000)}
                 themeVariant="dark"
               />
             )}
           </View>
 
-          {/* 押注金额 - 仅非恢复模式显示 */}
-          {!isRecoveryMode && (
-            <View className="mb-6">
-              <View className="flex-row justify-between items-center mb-3">
-                <Text className="text-white text-lg font-semibold">Stake Credit</Text>
-                <Text className="text-zinc-500 text-sm">
-                  Available: {formatCredit(user?.credit_balance || 0)}
+          {/* 押注金额 */}
+          <View className="mb-6">
+            <View className="flex-row justify-between items-center mb-3">
+              <Text className="text-white text-base font-semibold">
+                {isChina ? '押注积分' : 'Stake Credits'}
+              </Text>
+              <Text className="text-zinc-500 text-sm">
+                {isChina ? '可用' : 'Available'}: {user?.credits || 0}
+              </Text>
+            </View>
+
+            {/* 当前值 */}
+            <View className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-4 items-center">
+              <Text className="text-violet-400 text-4xl font-bold">{stake}</Text>
+              <Text className="text-zinc-500 text-sm mt-1">{isChina ? '积分' : 'Credits'}</Text>
+            </View>
+
+            {/* 滑块 */}
+            <Slider
+              value={stake}
+              onValueChange={(v) => setStake(Math.round(v / 10) * 10)}
+              minimumValue={MIN_STAKE}
+              maximumValue={Math.min(MAX_STAKE, user?.credits || MIN_STAKE)}
+              step={10}
+              minimumTrackTintColor="#a855f7"
+              maximumTrackTintColor="#27272a"
+              thumbTintColor="#a855f7"
+              style={{ height: 40 }}
+            />
+            <View className="flex-row justify-between">
+              <Text className="text-zinc-600 text-xs">{MIN_STAKE}</Text>
+              <Text className="text-zinc-600 text-xs">{Math.min(MAX_STAKE, user?.credits || MIN_STAKE)}</Text>
+            </View>
+          </View>
+
+          {/* 🎯 打卡点设置 - 核心新功能 */}
+          <View className="mb-6">
+            <View className="flex-row items-center mb-3">
+              <Text className="text-white text-base font-semibold">
+                {isChina ? '打卡点数量' : 'Checkin Points'}
+              </Text>
+              <TouchableOpacity className="ml-2">
+                <Ionicons name="information-circle-outline" size={18} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            {/* 打卡点数量选择 */}
+            <View className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-4">
+              <View className="flex-row items-center justify-between mb-4">
+                <TouchableOpacity
+                  onPress={() => setCheckinPointCount(Math.max(1, checkinPointCount - 1))}
+                  className="w-12 h-12 bg-white/10 rounded-xl items-center justify-center"
+                  disabled={checkinPointCount <= 1}
+                >
+                  <Ionicons name="remove" size={24} color={checkinPointCount <= 1 ? '#3f3f46' : '#fff'} />
+                </TouchableOpacity>
+                
+                <View className="items-center">
+                  <Text className="text-white text-3xl font-bold">{checkinPointCount}</Text>
+                  <Text className="text-zinc-500 text-sm">{isChina ? '个打卡点' : 'checkpoints'}</Text>
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => setCheckinPointCount(Math.min(maxCheckinPoints, checkinPointCount + 1))}
+                  className="w-12 h-12 bg-white/10 rounded-xl items-center justify-center"
+                  disabled={checkinPointCount >= maxCheckinPoints}
+                >
+                  <Ionicons name="add" size={24} color={checkinPointCount >= maxCheckinPoints ? '#3f3f46' : '#fff'} />
+                </TouchableOpacity>
+              </View>
+
+              <Text className="text-zinc-500 text-xs text-center">
+                {isChina 
+                  ? `最多 ${maxCheckinPoints} 个打卡点（每天一个）` 
+                  : `Max ${maxCheckinPoints} checkpoints (1 per day)`
+                }
+              </Text>
+            </View>
+
+            {/* 打卡点奖励预览 */}
+            <View className="bg-gradient-to-r from-violet-900/20 to-cyan-900/20 border border-violet-500/20 rounded-2xl p-4">
+              <Text className="text-violet-400 text-sm font-medium mb-3">
+                {isChina ? '📍 打卡点奖励分配（边际递减）' : '📍 Checkpoint Rewards (Diminishing)'}
+              </Text>
+              
+              <View className="flex-row flex-wrap">
+                {checkinPointRewards.map((reward, index) => (
+                  <View key={index} className="w-1/3 p-1">
+                    <View className="bg-white/5 rounded-xl p-3 items-center">
+                      <Text className="text-zinc-400 text-xs mb-1">
+                        {isChina ? `第${index + 1}点` : `#${index + 1}`}
+                      </Text>
+                      <Text className="text-white font-semibold">{reward}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+              
+              <View className="mt-3 pt-3 border-t border-white/10">
+                <Text className="text-zinc-500 text-xs">
+                  {isChina 
+                    ? '⚡ 越早的打卡点奖励越高，错过即损失！'
+                    : '⚡ Earlier checkpoints have higher rewards. Miss = Lost!'}
                 </Text>
               </View>
+            </View>
+          </View>
 
-              {/* 当前值显示 */}
-              <Card variant="default" className="mb-4">
-                <View className="items-center py-2">
-                  <Text className="text-violet-500 text-4xl font-bold">
-                    {formatCredit(stake)}
-                  </Text>
+          {/* 奖励分配预览 */}
+          <View className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-6">
+            <Text className="text-white text-sm font-medium mb-4">
+              {isChina ? '💰 奖励分配' : '💰 Reward Distribution'}
+            </Text>
+            
+            <View className="flex-row mb-4">
+              {/* 打卡奖励 */}
+              <View className="flex-1 mr-2">
+                <View className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 items-center">
+                  <Text className="text-emerald-400 text-xs mb-1">{isChina ? '打卡奖励' : 'Checkin'}</Text>
+                  <Text className="text-emerald-400 text-xl font-bold">{checkinReward}</Text>
+                  <Text className="text-emerald-400/60 text-xs">50%</Text>
                 </View>
-              </Card>
-
-              {/* 滑块 */}
-              <Slider
-                value={stake}
-                onValueChange={handleSliderChange}
-                minimumValue={minStake}
-                maximumValue={maxStake}
-                step={10}
-                minimumTrackTintColor="#8b5cf6"
-                maximumTrackTintColor="#3f3f46"
-                thumbTintColor="#8b5cf6"
-                style={{ height: 40 }}
-              />
-
-              {/* 范围显示 */}
-              <View className="flex-row justify-between mb-4">
-                <Text className="text-zinc-500 text-xs">{formatCredit(minStake)}</Text>
-                <Text className="text-zinc-500 text-xs">{formatCredit(maxStake)}</Text>
               </View>
-
-              {/* 自定义输入 */}
-              <View className="flex-row items-center">
-                <Text className="text-zinc-400 text-sm mr-3">Custom:</Text>
-                <TextInput
-                  className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-white text-base w-24"
-                  placeholder="Amount"
-                  placeholderTextColor="#71717a"
-                  value={customStake}
-                  onChangeText={handleCustomStakeChange}
-                  keyboardType="number-pad"
-                />
+              
+              {/* 结果奖励 */}
+              <View className="flex-1 ml-2">
+                <View className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-3 items-center">
+                  <Text className="text-cyan-400 text-xs mb-1">{isChina ? '结果奖励' : 'Result'}</Text>
+                  <Text className="text-cyan-400 text-xl font-bold">{resultReward}</Text>
+                  <Text className="text-cyan-400/60 text-xs">50%</Text>
+                </View>
               </View>
             </View>
-          )}
+
+            <Text className="text-zinc-500 text-xs text-center">
+              {isChina 
+                ? '完成所有打卡点 + 裁判通过 = 获得全部奖励'
+                : 'Complete all checkpoints + Pass referee = Full reward'}
+            </Text>
+          </View>
 
           {/* 风险提示 */}
-          <Card variant="outlined" className="mb-6 border-zinc-700">
-            <View className="flex-row items-start">
-              <Text className="text-xl mr-3">⚠️</Text>
-              <View className="flex-1">
-                <Text className="text-zinc-400 text-sm">
-                  {isRecoveryMode 
-                    ? 'If you fail this prediction, your original stake will be forfeited.'
-                    : `If you fail, your ${formatCredit(stake)} stake will be frozen. You'll need 2 consecutive successes to recover it.`
-                  }
-                </Text>
-              </View>
+          <View className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 mb-6 flex-row">
+            <Ionicons name="warning" size={20} color="#f59e0b" style={{ marginTop: 2 }} />
+            <View className="flex-1 ml-3">
+              <Text className="text-amber-500 text-sm">
+                {isChina 
+                  ? `错过打卡点将损失对应奖励，裁判投票失败将损失结果奖励 ${resultReward} 积分。`
+                  : `Missing checkpoints = lost rewards. Failed referee vote = lost ${resultReward} credits.`}
+              </Text>
             </View>
-          </Card>
+          </View>
         </ScrollView>
 
         {/* 底部按钮 */}
-        <View 
-          className="px-4 py-4 border-t border-zinc-800 bg-black"
-          style={{ paddingBottom: insets.bottom + 16 }}
-        >
-          <Button
+        <View className="px-4 py-4 border-t border-white/10 bg-[#030712]">
+          <TouchableOpacity
             onPress={handleCreate}
-            size="lg"
-            fullWidth
-            loading={isLoading}
-            disabled={!title.trim() || (!isRecoveryMode && stake > (user?.credit_balance || 0))}
+            disabled={isLoading || !title.trim() || stake > (user?.credits || 0)}
+            className={`py-4 rounded-2xl items-center ${
+              isLoading || !title.trim() || stake > (user?.credits || 0)
+                ? 'bg-zinc-800'
+                : 'bg-violet-600'
+            }`}
           >
-            {isRecoveryMode ? 'Start Recovery Prediction' : `Stake ${formatCredit(stake)} & Create`}
-          </Button>
+            {isLoading ? (
+              <Text className="text-white font-semibold">{isChina ? '创建中...' : 'Creating...'}</Text>
+            ) : (
+              <Text className="text-white font-semibold text-base">
+                {isChina ? `押注 ${stake} 积分并创建` : `Stake ${stake} & Create`}
+              </Text>
+            )}
+          </TouchableOpacity>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
-

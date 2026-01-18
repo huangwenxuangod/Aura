@@ -102,11 +102,10 @@ export async function addTestCredits(amount: number): Promise<void> {
   if (error) throw error;
 
   // 记录交易
-  await supabase.from('transactions').insert({
+  await supabase.from('credit_transactions').insert({
     user_id: user.id,
-    type: 'RECHARGE',
+    type: 'purchase',
     amount,
-    status: 'COMPLETED',
     description: 'Test credits (development)',
   });
 }
@@ -119,7 +118,7 @@ export async function getTransactions(): Promise<any[]> {
   if (!user) throw new Error('Not authenticated');
 
   const { data, error } = await supabase
-    .from('transactions')
+    .from('credit_transactions')
     .select('*')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });

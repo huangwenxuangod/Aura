@@ -1,5 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system';
+import { decode } from 'base64-arraybuffer';
 import { supabase } from '@/lib/supabase';
 
 export interface ImagePickerResult {
@@ -130,6 +132,7 @@ export async function compressImage(uri: string): Promise<string> {
 
 /**
  * 上传图片到 Supabase Storage
+ * 使用 base64 方式上传，避免 React Native 的 fetch blob 问题
  */
 export async function uploadImage(
   bucket: string,
@@ -143,23 +146,27 @@ export async function uploadImage(
   // 压缩图片
   const compressedUri = await compressImage(imageUri);
 
-  // 读取图片为 blob
-  const response = await fetch(compressedUri);
-  const blob = await response.blob();
+  // 使用 expo-file-system 读取为 base64
+  const base64Data = await FileSystem.readAsStringAsync(compressedUri, {
+    encoding: 'base64',
+  });
 
   // 生成文件名
   const extension = 'jpg';
   const fileName = `${path}/${Date.now()}.${extension}`;
 
-  // 模拟上传进度（Supabase JS SDK 暂不支持真实进度）
+  // 计算大小（base64 大约是原文件 4/3 倍）
+  const estimatedSize = Math.ceil(base64Data.length * 0.75);
+
+  // 模拟上传进度
   if (onProgress) {
-    onProgress({ loaded: 0, total: blob.size, percentage: 0 });
+    onProgress({ loaded: 0, total: estimatedSize, percentage: 0 });
   }
 
-  // 上传到 Supabase Storage
+  // 将 base64 转换为 ArrayBuffer 并上传
   const { data, error } = await supabase.storage
     .from(bucket)
-    .upload(fileName, blob, {
+    .upload(fileName, decode(base64Data), {
       contentType: 'image/jpeg',
       cacheControl: '3600',
       upsert: false,
@@ -171,7 +178,7 @@ export async function uploadImage(
 
   // 完成进度
   if (onProgress) {
-    onProgress({ loaded: blob.size, total: blob.size, percentage: 100 });
+    onProgress({ loaded: estimatedSize, total: estimatedSize, percentage: 100 });
   }
 
   // 获取公开 URL

@@ -39,7 +39,8 @@
           "merchantIdentifier": "merchant.com.aura.app",
           "enableGooglePay": true
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true

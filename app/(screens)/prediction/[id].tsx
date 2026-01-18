@@ -10,21 +10,24 @@ import {
   Share,
   RefreshControl,
   Clipboard,
+  StyleSheet,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import Toast from 'react-native-toast-message';
 import { useUserStore } from '@/stores/useUserStore';
 import { useCountdown } from '@/hooks/useCountdown';
 import { useRefresh } from '@/hooks/usePolling';
 import {
-  getPrediction,
+  getPredictionDetail,
   getReferees,
-  getCheckIns,
+  getCheckins,
   triggerJudging,
   cancelPrediction,
-  createCheckIn,
+  createCheckin,
+  calculateCheckinProgress,
 } from '@/services/prediction.service';
 import {
   pickImageFromLibrary,
@@ -37,16 +40,14 @@ import { formatCredits, formatDate } from '@/lib/utils';
 import { ImagePickerModal } from '@/components/ImagePickerModal';
 import { ImagePreview, CheckInImage } from '@/components/ImagePreview';
 import { FullScreenImage } from '@/components/FullScreenImage';
-import type { Prediction, Referee, CheckIn } from '@/types';
+import type { PredictionDetail, Referee, Checkin, CheckinPoint } from '@/types';
 
 export default function PredictionDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { fetchCurrentPrediction, fetchUser } = useUserStore();
+  const { fetchUser } = useUserStore();
 
-  const [prediction, setPrediction] = useState<Prediction | null>(null);
-  const [referees, setReferees] = useState<Referee[]>([]);
-  const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
+  const [prediction, setPrediction] = useState<PredictionDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [checkInContent, setCheckInContent] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -62,16 +63,8 @@ export default function PredictionDetailScreen() {
 
   const loadData = useCallback(async () => {
     if (!id) return;
-    
-    const [predictionData, refereesData, checkInsData] = await Promise.all([
-      getPrediction(id),
-      getReferees(id),
-      getCheckIns(id),
-    ]);
-
-    setPrediction(predictionData);
-    setReferees(refereesData);
-    setCheckIns(checkInsData);
+    const data = await getPredictionDetail(id);
+    setPrediction(data);
   }, [id]);
 
   useEffect(() => {
@@ -80,24 +73,30 @@ export default function PredictionDetailScreen() {
 
   const { isRefreshing, onRefresh } = useRefresh(loadData);
 
-  const canCancel = prediction && prediction.status === 'ACTIVE' && 
+  // 计算打卡进度
+  const checkinProgress = prediction?.checkin_points 
+    ? calculateCheckinProgress(prediction.checkin_points)
+    : null;
+
+  const canCancel = prediction && prediction.status === 'active' && 
     new Date().getTime() - new Date(prediction.created_at).getTime() < 5 * 60 * 1000;
 
-  const canTriggerJudging = prediction && prediction.status === 'ACTIVE' && referees.length > 0;
+  const canTriggerJudging = prediction && prediction.status === 'active' && 
+    (prediction.referees?.length || 0) > 0;
 
   const handleTriggerJudging = () => {
     Alert.alert(
-      'Request Judgment',
-      'Are you sure you want to request judgment from your referees? This action cannot be undone.',
+      '请求评审',
+      '确定要请求裁判们进行评审吗？此操作不可撤销。',
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: '取消', style: 'cancel' },
         {
-          text: 'Request',
+          text: '确定',
           onPress: async () => {
             try {
               await triggerJudging(id!);
               await loadData();
-              Toast.show({ type: 'success', text1: 'Judgment requested' });
+              Toast.show({ type: 'success', text1: '已请求评审' });
             } catch (error: any) {
               Toast.show({ type: 'error', text1: error.message });
             }
@@ -109,18 +108,18 @@ export default function PredictionDetailScreen() {
 
   const handleCancel = () => {
     Alert.alert(
-      'Cancel Prediction',
-      'Are you sure you want to cancel this prediction? Your stake will be refunded.',
+      '取消预测',
+      '确定要取消这个预测吗？你的押注将被退还。',
       [
-        { text: 'No', style: 'cancel' },
+        { text: '否', style: 'cancel' },
         {
-          text: 'Yes, Cancel',
+          text: '是，取消',
           style: 'destructive',
           onPress: async () => {
             try {
               await cancelPrediction(id!);
-              await Promise.all([fetchCurrentPrediction(), fetchUser()]);
-              Toast.show({ type: 'success', text1: 'Prediction cancelled' });
+              await fetchUser();
+              Toast.show({ type: 'success', text1: '预测已取消' });
               router.back();
             } catch (error: any) {
               Toast.show({ type: 'error', text1: error.message });
@@ -134,9 +133,7 @@ export default function PredictionDetailScreen() {
   const handleShare = async () => {
     try {
       const shareText = generateShareText(prediction!);
-      await Share.share({
-        message: shareText,
-      });
+      await Share.share({ message: shareText });
     } catch (error) {
       console.error('Share error:', error);
     }
@@ -147,14 +144,11 @@ export default function PredictionDetailScreen() {
       Clipboard.setString(prediction?.referee_code || '');
       Toast.show({
         type: 'success',
-        text1: 'Referee code copied!',
+        text1: '监督码已复制！',
         text2: prediction?.referee_code,
       });
     } catch (error) {
-      Toast.show({
-        type: 'error',
-        text1: 'Failed to copy',
-      });
+      Toast.show({ type: 'error', text1: '复制失败' });
     }
   };
 
@@ -163,9 +157,7 @@ export default function PredictionDetailScreen() {
     setShowImagePicker(false);
     try {
       const result = await pickImageFromLibrary();
-      if (result) {
-        setSelectedImage(result.uri);
-      }
+      if (result) setSelectedImage(result.uri);
     } catch (error: any) {
       Toast.show({ type: 'error', text1: error.message });
     }
@@ -175,22 +167,18 @@ export default function PredictionDetailScreen() {
     setShowImagePicker(false);
     try {
       const result = await takePhoto();
-      if (result) {
-        setSelectedImage(result.uri);
-      }
+      if (result) setSelectedImage(result.uri);
     } catch (error: any) {
       Toast.show({ type: 'error', text1: error.message });
     }
   };
 
-  const handleRemoveImage = () => {
-    setSelectedImage(null);
-  };
+  const handleRemoveImage = () => setSelectedImage(null);
 
   // 提交打卡
   const handleCheckIn = async () => {
-    if (!checkInContent.trim() && !selectedImage) {
-      Toast.show({ type: 'error', text1: 'Please enter content or add a photo' });
+    if (!checkInContent.trim() || checkInContent.trim().length < 10) {
+      Toast.show({ type: 'error', text1: '打卡内容至少需要10个字符' });
       return;
     }
 
@@ -201,28 +189,25 @@ export default function PredictionDetailScreen() {
     try {
       let imageUrl: string | undefined;
 
-      // 如果有图片，先上传
       if (selectedImage) {
         imageUrl = await uploadCheckInImage(
           id!,
           selectedImage,
-          (progress: UploadProgress) => {
-            setUploadProgress(progress.percentage);
-          }
+          (progress: UploadProgress) => setUploadProgress(progress.percentage)
         );
       }
 
-      // 创建打卡记录
-      await createCheckIn(id!, checkInContent.trim() || undefined, imageUrl);
+      await createCheckin({
+        prediction_id: id!,
+        content: checkInContent.trim(),
+        image_url: imageUrl,
+      });
       
-      // 清空输入
       setCheckInContent('');
       setSelectedImage(null);
-      
-      // 刷新数据
       await loadData();
       
-      Toast.show({ type: 'success', text1: 'Check-in submitted!' });
+      Toast.show({ type: 'success', text1: '打卡成功！' });
     } catch (error: any) {
       Toast.show({ type: 'error', text1: error.message });
     } finally {
@@ -234,213 +219,176 @@ export default function PredictionDetailScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView className="flex-1 bg-black items-center justify-center">
-        <ActivityIndicator size="large" color="#A78BFA" />
-      </SafeAreaView>
+      <View style={styles.container}>
+        <LinearGradient colors={['rgba(168, 85, 247, 0.15)', 'transparent']} style={styles.loadingGradient} />
+        <SafeAreaView style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#c084fc" />
+          <Text style={styles.loadingText}>加载中...</Text>
+        </SafeAreaView>
+      </View>
     );
   }
 
   if (!prediction) {
     return (
-      <SafeAreaView className="flex-1 bg-black items-center justify-center">
-        <Text className="text-white text-lg">Prediction not found</Text>
-      </SafeAreaView>
+      <View style={styles.container}>
+        <SafeAreaView style={styles.errorContainer}>
+          <Ionicons name="alert-circle" size={48} color="#ef4444" />
+          <Text style={styles.errorText}>预测不存在</Text>
+          <TouchableOpacity onPress={() => router.back()} style={styles.errorButton}>
+            <Text style={styles.errorButtonText}>返回</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </View>
     );
   }
 
-  const statusColors = {
-    ACTIVE: 'bg-emerald-500',
-    JUDGING: 'bg-amber-500',
-    SUCCESS: 'bg-emerald-500',
-    FAILED: 'bg-red-500',
-    CANCELLED: 'bg-zinc-500',
+  // 状态配置（新系统使用小写）
+  const statusConfig: Record<string, any> = {
+    active: { color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.15)', label: '进行中' },
+    judging: { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)', label: '评审中' },
+    settled: { 
+      color: prediction.final_result === 'success' ? '#10b981' : '#ef4444',
+      bgColor: prediction.final_result === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+      label: prediction.final_result === 'success' ? '成功' : '失败'
+    },
   };
-
-  const statusLabels = {
-    ACTIVE: 'Active',
-    JUDGING: 'Awaiting Judgment',
-    SUCCESS: 'Success',
-    FAILED: 'Failed',
-    CANCELLED: 'Cancelled',
-  };
+  const currentStatus = statusConfig[prediction.status] || statusConfig.active;
+  const referees = prediction.referees || [];
+  const checkins = prediction.checkins || [];
 
   return (
-    <SafeAreaView className="flex-1 bg-black" edges={['top']}>
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ paddingBottom: 100 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={onRefresh}
-            tintColor="#A78BFA"
-          />
-        }
-      >
-        {/* Header */}
-        <View className="flex-row items-center justify-between px-6 pt-4 pb-2">
-          <TouchableOpacity
-            onPress={() => router.back()}
-            className="w-10 h-10 rounded-full bg-zinc-900 items-center justify-center"
-          >
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View className="flex-row">
-            <TouchableOpacity
-              onPress={handleShare}
-              className="w-10 h-10 rounded-full bg-zinc-900 items-center justify-center mr-2"
-            >
-              <Ionicons name="share-outline" size={24} color="#fff" />
+    <View style={styles.container}>
+      {/* Aurora Background */}
+      <View style={styles.auroraContainer}>
+        <LinearGradient colors={['rgba(168, 85, 247, 0.12)', 'transparent']} style={[styles.auroraOrb, styles.auroraOrb1]} />
+        <LinearGradient colors={['rgba(6, 182, 212, 0.1)', 'transparent']} style={[styles.auroraOrb, styles.auroraOrb2]} />
+      </View>
+
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#c084fc" />}
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+              <Ionicons name="arrow-back" size={24} color="#fff" />
             </TouchableOpacity>
-            {canCancel && (
-              <TouchableOpacity
-                onPress={handleCancel}
-                className="w-10 h-10 rounded-full bg-red-500/20 items-center justify-center"
-              >
-                <Ionicons name="close" size={24} color="#EF4444" />
+            <View style={styles.headerActions}>
+              <TouchableOpacity onPress={handleShare} style={styles.headerButton}>
+                <Ionicons name="share-outline" size={22} color="#fff" />
               </TouchableOpacity>
-            )}
+              {canCancel && (
+                <TouchableOpacity onPress={handleCancel} style={[styles.headerButton, styles.cancelButton]}>
+                  <Ionicons name="close" size={22} color="#ef4444" />
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
-        </View>
 
-        {/* Status & Countdown */}
-        <View className="px-6 py-4">
-          <View className="flex-row items-center mb-4">
-            <View className={`w-2 h-2 rounded-full mr-2 ${statusColors[prediction.status]}`} />
-            <Text className="text-zinc-400">{statusLabels[prediction.status]}</Text>
-            {prediction.is_recovery && (
-              <View className="ml-2 px-2 py-0.5 bg-amber-500/20 rounded">
-                <Text className="text-amber-500 text-xs">Recovery</Text>
+          {/* Status Badge */}
+          <View style={styles.statusSection}>
+            <View style={[styles.statusBadge, { backgroundColor: currentStatus.bgColor }]}>
+              <View style={[styles.statusDot, { backgroundColor: currentStatus.color }]} />
+              <Text style={[styles.statusText, { color: currentStatus.color }]}>{currentStatus.label}</Text>
+            </View>
+          </View>
+
+          {/* Title & Basic Info */}
+          <View style={styles.titleSection}>
+            <Text style={styles.predictionTitle}>{prediction.title}</Text>
+            {prediction.description && <Text style={styles.predictionDesc}>{prediction.description}</Text>}
+            <View style={styles.basicInfoRow}>
+              <View style={styles.basicInfoItem}>
+                <Ionicons name="diamond" size={14} color="#c084fc" />
+                <Text style={styles.basicInfoText}>{prediction.total_stake} Credits</Text>
               </View>
-            )}
+              <View style={styles.basicInfoDot} />
+              <View style={styles.basicInfoItem}>
+                <Ionicons name="calendar-outline" size={14} color="#64748b" />
+                <Text style={styles.basicInfoText}>{formatDate(prediction.deadline)}</Text>
+              </View>
+            </View>
           </View>
 
-          <Text className="text-white text-2xl font-bold mb-2">
-            {prediction.title}
-          </Text>
-
-          {prediction.description && (
-            <Text className="text-zinc-500 text-base mb-4">
-              {prediction.description}
-            </Text>
-          )}
-
-          {/* Countdown Card */}
-          {prediction.status === 'ACTIVE' && (
-            <View className="bg-zinc-900 rounded-2xl p-4 mb-4">
-              <Text className="text-zinc-500 text-sm mb-2">Time Remaining</Text>
-              <Text className={`text-3xl font-bold ${countdown.isExpired ? 'text-red-500' : 'text-white'}`}>
+          {/* Countdown */}
+          {prediction.status === 'active' && (
+            <View style={styles.countdownCard}>
+              <Text style={styles.countdownLabel}>剩余时间</Text>
+              <Text style={[styles.countdownValue, countdown.isExpired && styles.countdownExpired]}>
                 {countdown.formatted}
               </Text>
             </View>
           )}
 
-          {/* Stake Info */}
-          <View className="flex-row gap-4 mb-4">
-            <View className="flex-1 bg-zinc-900 rounded-2xl p-4">
-              <Text className="text-zinc-500 text-sm mb-1">Stake</Text>
-              <Text className="text-violet-400 text-xl font-bold">
-                {prediction.is_recovery ? 'Recovery' : `${formatCredits(prediction.stake)} credits`}
-              </Text>
-            </View>
-            <View className="flex-1 bg-zinc-900 rounded-2xl p-4">
-              <Text className="text-zinc-500 text-sm mb-1">Deadline</Text>
-              <Text className="text-white text-lg font-semibold">
-                {formatDate(prediction.deadline)}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Referee Code */}
-        <View className="px-6 mb-6">
-          <Text className="text-zinc-400 text-sm mb-2">Referee Code</Text>
-          <TouchableOpacity
-            onPress={handleCopyCode}
-            className="bg-zinc-900 rounded-2xl p-4 flex-row items-center justify-between"
-            activeOpacity={0.8}
-          >
-            <Text className="text-white text-2xl font-mono tracking-widest">
-              {prediction.referee_code}
-            </Text>
-            <Ionicons name="copy-outline" size={24} color="#A78BFA" />
-          </TouchableOpacity>
-          <Text className="text-zinc-600 text-xs mt-2 ml-1">
-            Share this code with friends to invite them as referees
-          </Text>
-        </View>
-
-        {/* Referees */}
-        <View className="px-6 mb-6">
-          <View className="flex-row items-center justify-between mb-3">
-            <Text className="text-zinc-400 text-sm">Referees ({referees.length})</Text>
-          </View>
-          
-          {referees.length === 0 ? (
-            <View className="bg-zinc-900/50 rounded-2xl p-4 items-center">
-              <Ionicons name="people-outline" size={32} color="#52525B" />
-              <Text className="text-zinc-500 mt-2">No referees yet</Text>
-              <Text className="text-zinc-600 text-sm mt-1">
-                Share your referee code to invite friends
-              </Text>
-            </View>
-          ) : (
-            <View className="bg-zinc-900 rounded-2xl overflow-hidden">
-              {referees.map((referee, index) => (
-                <View
-                  key={referee.id}
-                  className={`flex-row items-center p-4 ${index > 0 ? 'border-t border-zinc-800' : ''}`}
-                >
-                  <View className="w-10 h-10 rounded-full bg-violet-600/30 items-center justify-center mr-3">
-                    <Text className="text-violet-400 font-semibold">
-                      {(referee as any).users?.display_name?.charAt(0).toUpperCase() || '?'}
-                    </Text>
-                  </View>
-                  <View className="flex-1">
-                    <Text className="text-white">
-                      {(referee as any).users?.display_name || 'Anonymous'}
-                    </Text>
-                  </View>
-                  {prediction.status === 'JUDGING' && (
-                    <View className={`px-3 py-1 rounded-full ${
-                      referee.vote === 'YES' ? 'bg-emerald-500/20' :
-                      referee.vote === 'NO' ? 'bg-red-500/20' : 'bg-zinc-800'
-                    }`}>
-                      <Text className={`text-sm ${
-                        referee.vote === 'YES' ? 'text-emerald-500' :
-                        referee.vote === 'NO' ? 'text-red-500' : 'text-zinc-500'
-                      }`}>
-                        {referee.vote || 'Pending'}
-                      </Text>
-                    </View>
-                  )}
+          {/* Checkin Progress */}
+          {checkinProgress && (
+            <View style={styles.progressCard}>
+              <Text style={styles.sectionTitle}>📍 打卡进度</Text>
+              <View style={styles.progressStats}>
+                <View style={styles.progressStatItem}>
+                  <Text style={[styles.progressStatValue, { color: '#10b981' }]}>{checkinProgress.completed}</Text>
+                  <Text style={styles.progressStatLabel}>已完成</Text>
                 </View>
-              ))}
+                <View style={styles.progressStatDivider} />
+                <View style={styles.progressStatItem}>
+                  <Text style={[styles.progressStatValue, { color: '#ef4444' }]}>{checkinProgress.missed}</Text>
+                  <Text style={styles.progressStatLabel}>已错过</Text>
+                </View>
+                <View style={styles.progressStatDivider} />
+                <View style={styles.progressStatItem}>
+                  <Text style={styles.progressStatValue}>{checkinProgress.pending}</Text>
+                  <Text style={styles.progressStatLabel}>待完成</Text>
+                </View>
+              </View>
+              <View style={styles.progressBar}>
+                <View style={[styles.progressBarFill, { width: `${(checkinProgress.completed / checkinProgress.total) * 100}%` }]} />
+              </View>
+              <View style={styles.rewardRow}>
+                <Text style={styles.rewardText}>已获得: {checkinProgress.earnedReward}</Text>
+                {checkinProgress.lostReward > 0 && (
+                  <Text style={[styles.rewardText, { color: '#ef4444' }]}>已损失: {checkinProgress.lostReward}</Text>
+                )}
+              </View>
             </View>
           )}
-        </View>
 
-        {/* Check-ins */}
-        {prediction.status === 'ACTIVE' && (
-          <View className="px-6 mb-6">
-            <Text className="text-zinc-400 text-sm mb-3">Check-ins ({checkIns.length})</Text>
-            
-            {/* Check-in Input */}
-            <View className="bg-zinc-900 rounded-2xl p-4 mb-4">
-              <TextInput
-                value={checkInContent}
-                onChangeText={setCheckInContent}
-                placeholder="Share your progress..."
-                placeholderTextColor="#52525B"
-                className="text-white text-base mb-3"
-                multiline
-                maxLength={500}
-                editable={!isSubmitting}
-              />
+          {/* Referee Code */}
+          <View style={styles.refereeCodeCard}>
+            <Text style={styles.sectionTitle}>监督码</Text>
+            <TouchableOpacity onPress={handleCopyCode} style={styles.codeContainer} activeOpacity={0.8}>
+              <Text style={styles.codeText}>{prediction.referee_code}</Text>
+              <Ionicons name="copy-outline" size={22} color="#a855f7" />
+            </TouchableOpacity>
+            <Text style={styles.codeHint}>分享给朋友邀请他们成为监督人</Text>
+          </View>
 
-              {/* 已选择的图片预览 */}
-              {selectedImage && (
-                <View className="mb-3">
+          {/* Referees Count (hidden details) */}
+          <View style={styles.refereeCountCard}>
+            <Ionicons name="eye-outline" size={20} color="#64748b" />
+            <Text style={styles.refereeCountText}>
+              {referees.length > 0 ? `${referees.length} 位监督人正在关注` : '还没有监督人'}
+            </Text>
+          </View>
+
+          {/* Check-in Input */}
+          {prediction.status === 'active' && (
+            <View style={styles.checkinSection}>
+              <Text style={styles.sectionTitle}>打卡 ({checkins.length})</Text>
+              <View style={styles.checkinInput}>
+                <TextInput
+                  value={checkInContent}
+                  onChangeText={setCheckInContent}
+                  placeholder="分享你的进展（至少10字）..."
+                  placeholderTextColor="#52525b"
+                  style={styles.textInput}
+                  multiline
+                  maxLength={500}
+                  editable={!isSubmitting}
+                />
+                {selectedImage && (
                   <ImagePreview
                     uri={selectedImage}
                     onRemove={handleRemoveImage}
@@ -448,133 +396,60 @@ export default function PredictionDetailScreen() {
                     uploadProgress={uploadProgress}
                     size="large"
                   />
-                </View>
-              )}
-
-              <View className="flex-row justify-between items-center">
-                <TouchableOpacity
-                  onPress={() => setShowImagePicker(true)}
-                  className="flex-row items-center"
-                  disabled={isSubmitting}
-                >
-                  <Ionicons 
-                    name={selectedImage ? "image" : "image-outline"} 
-                    size={24} 
-                    color={selectedImage ? "#A78BFA" : "#71717A"} 
-                  />
-                  <Text className={`ml-2 ${selectedImage ? 'text-violet-400' : 'text-zinc-500'}`}>
-                    {selectedImage ? 'Change Photo' : 'Add Photo'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleCheckIn}
-                  disabled={isSubmitting || (!checkInContent.trim() && !selectedImage)}
-                  className={`px-4 py-2 rounded-xl ${
-                    (checkInContent.trim() || selectedImage) && !isSubmitting
-                      ? 'bg-violet-600' 
-                      : 'bg-zinc-700'
-                  }`}
-                >
-                  {isSubmitting ? (
-                    <View className="flex-row items-center">
+                )}
+                <View style={styles.checkinActions}>
+                  <TouchableOpacity onPress={() => setShowImagePicker(true)} disabled={isSubmitting} style={styles.photoButton}>
+                    <Ionicons name={selectedImage ? 'image' : 'image-outline'} size={24} color={selectedImage ? '#a855f7' : '#71717a'} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleCheckIn}
+                    disabled={isSubmitting || checkInContent.trim().length < 10}
+                    style={[styles.submitButton, (checkInContent.trim().length >= 10 && !isSubmitting) && styles.submitButtonActive]}
+                  >
+                    {isSubmitting ? (
                       <ActivityIndicator size="small" color="#fff" />
-                      <Text className="text-white font-semibold ml-2">
-                        {isUploading ? `${uploadProgress}%` : 'Posting...'}
-                      </Text>
-                    </View>
-                  ) : (
-                    <Text className="text-white font-semibold">Post</Text>
+                    ) : (
+                      <Text style={styles.submitButtonText}>发布</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Checkins List */}
+          {checkins.length > 0 && (
+            <View style={styles.checkinsList}>
+              {checkins.map((checkin) => (
+                <View key={checkin.id} style={styles.checkinCard}>
+                  <Text style={styles.checkinContent}>{checkin.content}</Text>
+                  {checkin.image_url && (
+                    <CheckInImage uri={checkin.image_url} onPress={() => setFullScreenImage(checkin.image_url!)} />
                   )}
-                </TouchableOpacity>
-              </View>
+                  <Text style={styles.checkinDate}>{formatDate(checkin.created_at)}</Text>
+                </View>
+              ))}
             </View>
+          )}
 
-            {/* Check-in List */}
-            {checkIns.map((checkIn) => (
-              <View key={checkIn.id} className="bg-zinc-900/50 rounded-2xl p-4 mb-2">
-                {checkIn.content && (
-                  <Text className="text-white">{checkIn.content}</Text>
-                )}
-                {checkIn.image_url && (
-                  <CheckInImage
-                    uri={checkIn.image_url}
-                    onPress={() => setFullScreenImage(checkIn.image_url)}
-                  />
-                )}
-                <Text className="text-zinc-600 text-xs mt-2">
-                  {formatDate(checkIn.created_at)}
-                </Text>
-              </View>
-            ))}
-
-            {checkIns.length === 0 && (
-              <View className="bg-zinc-900/30 rounded-2xl p-6 items-center">
-                <Ionicons name="document-text-outline" size={32} color="#52525B" />
-                <Text className="text-zinc-500 mt-2">No check-ins yet</Text>
-                <Text className="text-zinc-600 text-sm mt-1">
-                  Share your progress with photos and updates
-                </Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Completed Check-ins (for non-active predictions) */}
-        {prediction.status !== 'ACTIVE' && checkIns.length > 0 && (
-          <View className="px-6 mb-6">
-            <Text className="text-zinc-400 text-sm mb-3">Check-in History ({checkIns.length})</Text>
-            {checkIns.map((checkIn) => (
-              <View key={checkIn.id} className="bg-zinc-900/50 rounded-2xl p-4 mb-2">
-                {checkIn.content && (
-                  <Text className="text-white">{checkIn.content}</Text>
-                )}
-                {checkIn.image_url && (
-                  <CheckInImage
-                    uri={checkIn.image_url}
-                    onPress={() => setFullScreenImage(checkIn.image_url)}
-                  />
-                )}
-                <Text className="text-zinc-600 text-xs mt-2">
-                  {formatDate(checkIn.created_at)}
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Action Button */}
-        {canTriggerJudging && (
-          <View className="px-6">
-            <TouchableOpacity
-              onPress={handleTriggerJudging}
-              className="bg-violet-600 rounded-xl py-4 items-center"
-              activeOpacity={0.8}
-            >
-              <Text className="text-white font-semibold text-lg">
-                Request Judgment
-              </Text>
+          {/* Action Button */}
+          {canTriggerJudging && (
+            <TouchableOpacity onPress={handleTriggerJudging} style={styles.actionButton}>
+              <LinearGradient colors={['#c084fc', '#a855f7', '#9333ea']} style={styles.actionButtonGradient}>
+                <Text style={styles.actionButtonText}>请求评审</Text>
+              </LinearGradient>
             </TouchableOpacity>
-            <Text className="text-zinc-600 text-xs text-center mt-2">
-              Your referees will vote on whether you succeeded
-            </Text>
-          </View>
-        )}
+          )}
 
-        {prediction.status === 'ACTIVE' && referees.length === 0 && (
-          <View className="px-6">
-            <View className="bg-amber-500/10 rounded-xl p-4">
-              <View className="flex-row items-center">
-                <Ionicons name="warning" size={20} color="#F59E0B" />
-                <Text className="text-amber-500 ml-2 flex-1">
-                  You need at least 1 referee to request judgment
-                </Text>
-              </View>
+          {prediction.status === 'active' && referees.length === 0 && (
+            <View style={styles.warningCard}>
+              <Ionicons name="warning" size={20} color="#f59e0b" />
+              <Text style={styles.warningText}>你需要至少1个监督人才能请求评审</Text>
             </View>
-          </View>
-        )}
-      </ScrollView>
+          )}
+        </ScrollView>
+      </SafeAreaView>
 
-      {/* Image Picker Modal */}
       <ImagePickerModal
         visible={showImagePicker}
         onClose={() => setShowImagePicker(false)}
@@ -582,14 +457,83 @@ export default function PredictionDetailScreen() {
         onTakePhoto={handleTakePhoto}
       />
 
-      {/* Full Screen Image Viewer */}
       {fullScreenImage && (
-        <FullScreenImage
-          visible={!!fullScreenImage}
-          uri={fullScreenImage}
-          onClose={() => setFullScreenImage(null)}
-        />
+        <FullScreenImage visible={!!fullScreenImage} uri={fullScreenImage} onClose={() => setFullScreenImage(null)} />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#030712' },
+  auroraContainer: { position: 'absolute', top: 0, left: 0, right: 0, height: 400 },
+  auroraOrb: { position: 'absolute', borderRadius: 200 },
+  auroraOrb1: { width: 350, height: 350, top: -150, left: -100 },
+  auroraOrb2: { width: 280, height: 280, top: -80, right: -80 },
+  safeArea: { flex: 1 },
+  scrollView: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16, paddingBottom: 100 },
+  loadingGradient: { position: 'absolute', top: 0, left: 0, right: 0, height: 300 },
+  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  loadingText: { color: '#64748b', marginTop: 16, fontSize: 16 },
+  errorContainer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  errorText: { color: '#fff', fontSize: 18, marginTop: 16 },
+  errorButton: { marginTop: 24, backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 },
+  errorButtonText: { color: '#fff', fontSize: 16 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12 },
+  backButton: { padding: 8 },
+  headerActions: { flexDirection: 'row', gap: 8 },
+  headerButton: { width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
+  cancelButton: { backgroundColor: 'rgba(239, 68, 68, 0.15)' },
+  statusSection: { marginBottom: 12 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  statusText: { fontSize: 13, fontWeight: '600' },
+  titleSection: { marginBottom: 16 },
+  predictionTitle: { fontSize: 26, fontWeight: '700', color: '#f8fafc', letterSpacing: -0.3 },
+  predictionDesc: { fontSize: 15, color: '#64748b', marginTop: 8, lineHeight: 22 },
+  basicInfoRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12 },
+  basicInfoItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  basicInfoText: { color: '#94a3b8', fontSize: 13 },
+  basicInfoDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#475569', marginHorizontal: 10 },
+  countdownCard: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  countdownLabel: { color: '#64748b', fontSize: 13, marginBottom: 4 },
+  countdownValue: { color: '#f8fafc', fontSize: 32, fontWeight: '700' },
+  countdownExpired: { color: '#ef4444' },
+  progressCard: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  sectionTitle: { color: '#94a3b8', fontSize: 13, fontWeight: '600', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
+  progressStats: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 16 },
+  progressStatItem: { alignItems: 'center' },
+  progressStatValue: { fontSize: 24, fontWeight: '700', color: '#f8fafc' },
+  progressStatLabel: { fontSize: 12, color: '#64748b', marginTop: 4 },
+  progressStatDivider: { width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.08)' },
+  progressBar: { height: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, marginBottom: 12 },
+  progressBarFill: { height: '100%', backgroundColor: '#10b981', borderRadius: 3 },
+  rewardRow: { flexDirection: 'row', gap: 16 },
+  rewardText: { fontSize: 13, color: '#10b981' },
+  refereeCodeCard: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  codeContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 12, padding: 16 },
+  codeText: { color: '#f8fafc', fontSize: 24, fontWeight: '700', fontFamily: 'monospace', letterSpacing: 4 },
+  codeHint: { color: '#52525b', fontSize: 12, marginTop: 8 },
+  refereeCountCard: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  refereeCountText: { color: '#64748b', fontSize: 14 },
+  emptyCard: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 32, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  emptyText: { color: '#52525b', fontSize: 14, marginTop: 12 },
+  checkinSection: { marginBottom: 16 },
+  checkinInput: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  textInput: { color: '#f8fafc', fontSize: 15, minHeight: 80, textAlignVertical: 'top', marginBottom: 12 },
+  checkinActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  photoButton: { padding: 8 },
+  submitButton: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10 },
+  submitButtonActive: { backgroundColor: '#a855f7' },
+  submitButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  checkinsList: { marginBottom: 16 },
+  checkinCard: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 14, marginBottom: 8 },
+  checkinContent: { color: '#f8fafc', fontSize: 15, lineHeight: 22 },
+  checkinDate: { color: '#52525b', fontSize: 12, marginTop: 8 },
+  actionButton: { borderRadius: 16, overflow: 'hidden', marginBottom: 16 },
+  actionButtonGradient: { paddingVertical: 18, alignItems: 'center' },
+  actionButtonText: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  warningCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245,158,11,0.1)', borderRadius: 12, padding: 16, gap: 10 },
+  warningText: { flex: 1, color: '#f59e0b', fontSize: 14 },
+});

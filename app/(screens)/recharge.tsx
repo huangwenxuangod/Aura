@@ -116,7 +116,7 @@ export default function RechargeScreen() {
           <Text className="text-zinc-500 text-sm mb-2">Current Balance</Text>
           <View className="flex-row items-baseline">
             <Text className="text-white text-4xl font-bold">
-              {formatCredits(user?.credit_balance || 0)}
+              {formatCredits(user?.credits || 0)}
             </Text>
             <Text className="text-zinc-500 text-lg ml-2">credits</Text>
           </View>

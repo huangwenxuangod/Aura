@@ -157,7 +157,7 @@ export default function ProfileScreen() {
                   <View>
                     <Text style={styles.statLabel}>Credits</Text>
                     <Text style={styles.statValue}>
-                      {formatCredits(user?.credit_balance || 0)}
+                      {formatCredits(user?.credits || 0)}
                     </Text>
                   </View>
                 </View>
@@ -169,7 +169,7 @@ export default function ProfileScreen() {
                   <View>
                     <Text style={styles.statLabel}>Streak</Text>
                     <Text style={[styles.statValue, styles.statValueOrange]}>
-                      {user?.consecutive_successes || 0}
+                      0
                     </Text>
                   </View>
                 </View>

@@ -50,13 +50,12 @@ serve(async (req) => {
 
         // 记录交易
         const { error: transactionError } = await supabaseAdmin
-          .from('transactions')
+          .from('credit_transactions')
           .insert({
             user_id: userId,
-            type: 'RECHARGE',
+            type: 'purchase',
             amount: creditsAmount,
-            stripe_payment_intent_id: paymentIntent.id,
-            status: 'COMPLETED',
+            description: `Stripe payment: ${paymentIntent.id}`,
           });
 
         if (transactionError) {
@@ -72,14 +71,8 @@ serve(async (req) => {
         const { userId, credits } = paymentIntent.metadata;
 
         if (userId) {
-          // 记录失败的交易
-          await supabaseAdmin.from('transactions').insert({
-            user_id: userId,
-            type: 'RECHARGE',
-            amount: parseInt(credits || '0', 10),
-            stripe_payment_intent_id: paymentIntent.id,
-            status: 'FAILED',
-          });
+          // 记录失败的交易（可选）
+          console.log(`Payment failed for user ${userId}, amount: ${credits}`);
         }
 
         console.log('Payment failed:', paymentIntent.id);

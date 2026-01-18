@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,32 +12,45 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useUserStore } from '@/stores/useUserStore';
+import { usePredictionStore } from '@/stores/usePredictionStore';
 import { useCountdown } from '@/hooks/useCountdown';
-import { useRefresh } from '@/hooks/usePolling';
-import { formatCredits } from '@/lib/utils';
+import { useRegionStore } from '@/stores/useRegionStore';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { user, currentPrediction, recovery, fetchUser, fetchCurrentPrediction, fetchRecovery } = useUserStore();
+  const { user, fetchUser } = useUserStore();
+  const { currentPrediction, checkinProgress, todayCheckinPoint, fetchCurrentPrediction } = usePredictionStore();
+  const { region } = useRegionStore();
+  const isChina = region === 'CN';
 
-  const { isRefreshing, onRefresh } = useRefresh(async () => {
-    await Promise.all([fetchUser(), fetchCurrentPrediction(), fetchRecovery()]);
-  });
+  // 刷新状态
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    await Promise.all([fetchUser(), fetchCurrentPrediction()]);
+    setIsRefreshing(false);
+  }, []);
 
   const countdown = useCountdown(currentPrediction?.deadline || null);
 
+  // 初始化
+  useEffect(() => {
+    fetchUser();
+    fetchCurrentPrediction();
+  }, []);
+
   const handleCreatePrediction = () => {
-    router.push('/prediction');
+    router.push('/prediction/create');
   };
 
   const handleViewPrediction = () => {
     if (currentPrediction) {
-      router.push(`/(screens)/prediction/${currentPrediction.id}`);
+      router.push(`/prediction/${currentPrediction.id}`);
     }
   };
 
-  const isInRecovery = recovery && recovery.status === 'IN_PROGRESS';
-  const canCreatePrediction = !currentPrediction && !isInRecovery;
+  const canCreatePrediction = !currentPrediction || currentPrediction.status === 'settled';
 
   return (
     <View style={styles.container}>
@@ -79,9 +92,11 @@ export default function HomeScreen() {
           {/* Header */}
           <View style={styles.header}>
             <View>
-              <Text style={styles.greeting}>Welcome back</Text>
+              <Text style={styles.greeting}>
+                {isChina ? '欢迎回来' : 'Welcome back'}
+              </Text>
               <Text style={styles.username}>
-                {user?.display_name || 'User'}
+                {user?.display_name || (isChina ? '用户' : 'User')}
               </Text>
             </View>
             <TouchableOpacity
@@ -93,13 +108,7 @@ export default function HomeScreen() {
                 colors={['rgba(168, 85, 247, 0.3)', 'rgba(168, 85, 247, 0.1)']}
                 style={styles.avatarGradient}
               >
-                {user?.avatar_url ? (
-                  <Text style={styles.avatarText}>
-                    {user.display_name?.charAt(0).toUpperCase() || 'U'}
-                  </Text>
-                ) : (
-                  <Ionicons name="person" size={24} color="#c084fc" />
-                )}
+                <Ionicons name="person" size={24} color="#c084fc" />
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -119,12 +128,16 @@ export default function HomeScreen() {
               </View>
 
               <View style={styles.balanceContent}>
-                <Text style={styles.balanceLabel}>Available Credits</Text>
+                <Text style={styles.balanceLabel}>
+                  {isChina ? '可用积分' : 'Available Credits'}
+                </Text>
                 <View style={styles.balanceRow}>
                   <Text style={styles.balanceValue}>
-                    {formatCredits(user?.credit_balance || 0)}
+                    {user?.credits || 0}
                   </Text>
-                  <Text style={styles.balanceUnit}>credits</Text>
+                  <Text style={styles.balanceUnit}>
+                    {isChina ? '积分' : 'credits'}
+                  </Text>
                 </View>
 
                 <View style={styles.balanceActions}>
@@ -140,7 +153,9 @@ export default function HomeScreen() {
                       style={styles.primaryButtonGradient}
                     >
                       <Ionicons name="flash" size={18} color="#fff" style={{ marginRight: 6 }} />
-                      <Text style={styles.primaryButtonText}>Recharge</Text>
+                      <Text style={styles.primaryButtonText}>
+                        {isChina ? '充值' : 'Recharge'}
+                      </Text>
                     </LinearGradient>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -149,65 +164,50 @@ export default function HomeScreen() {
                     activeOpacity={0.8}
                   >
                     <Ionicons name="time-outline" size={18} color="#f8fafc" style={{ marginRight: 6 }} />
-                    <Text style={styles.secondaryButtonText}>History</Text>
+                    <Text style={styles.secondaryButtonText}>
+                      {isChina ? '记录' : 'History'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
             </LinearGradient>
           </View>
 
-          {/* Streak Card */}
-          <View style={styles.streakCard}>
-            <LinearGradient
-              colors={['rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.02)']}
-              style={styles.streakGradient}
-            >
-              <View style={styles.streakIconContainer}>
-                <Text style={styles.streakIcon}>🔥</Text>
-              </View>
-              <View style={styles.streakContent}>
-                <Text style={styles.streakLabel}>Consecutive Successes</Text>
-                <Text style={styles.streakValue}>
-                  {user?.consecutive_successes || 0}
-                </Text>
-              </View>
-              <View style={styles.streakBadge}>
-                <Text style={styles.streakBadgeText}>
-                  {(user?.consecutive_successes ?? 0) >= 5 ? '🏆 Elite' : (user?.consecutive_successes ?? 0) >= 3 ? '⭐ Rising' : '🌱 Growing'}
-                </Text>
-              </View>
-            </LinearGradient>
-          </View>
-
-          {/* Recovery Mode Banner */}
-          {isInRecovery && (
-            <View style={styles.recoveryBanner}>
+          {/* 今日打卡提醒 */}
+          {todayCheckinPoint && (
+            <View style={styles.todayCheckinBanner}>
               <LinearGradient
-                colors={['rgba(245, 158, 11, 0.12)', 'rgba(245, 158, 11, 0.05)']}
-                style={styles.recoveryGradient}
+                colors={['rgba(16, 185, 129, 0.12)', 'rgba(16, 185, 129, 0.05)']}
+                style={styles.todayCheckinGradient}
               >
-                <View style={styles.recoveryHeader}>
-                  <View style={styles.recoveryIconContainer}>
-                    <Ionicons name="refresh" size={20} color="#f59e0b" />
-                  </View>
-                  <View style={styles.recoveryTitleContainer}>
-                    <Text style={styles.recoveryTitle}>Recovery Mode</Text>
-                    <Text style={styles.recoverySubtitle}>
-                      {2 - (recovery.success_count || 0)} more to recover {formatCredits(recovery.original_stake)} credits
-                    </Text>
-                  </View>
+                <View style={styles.todayCheckinIconContainer}>
+                  <Ionicons name="today" size={22} color="#10b981" />
                 </View>
-                <View style={styles.recoveryProgress}>
-                  <View style={[styles.recoveryDot, recovery.success_count >= 1 && styles.recoveryDotActive]} />
-                  <View style={styles.recoveryLine} />
-                  <View style={[styles.recoveryDot, recovery.success_count >= 2 && styles.recoveryDotActive]} />
+                <View style={styles.todayCheckinContent}>
+                  <Text style={styles.todayCheckinTitle}>
+                    {isChina ? '今日打卡' : "Today's Checkin"}
+                  </Text>
+                  <Text style={styles.todayCheckinSubtitle}>
+                    {isChina 
+                      ? `完成可获得 ${todayCheckinPoint.reward_amount} 积分奖励`
+                      : `Complete to earn ${todayCheckinPoint.reward_amount} credits`
+                    }
+                  </Text>
                 </View>
+                <TouchableOpacity 
+                  onPress={handleViewPrediction}
+                  style={styles.todayCheckinButton}
+                >
+                  <Text style={styles.todayCheckinButtonText}>
+                    {isChina ? '去打卡' : 'Check'}
+                  </Text>
+                </TouchableOpacity>
               </LinearGradient>
             </View>
           )}
 
           {/* Current Prediction */}
-          {currentPrediction ? (
+          {currentPrediction && currentPrediction.status !== 'settled' ? (
             <TouchableOpacity
               onPress={handleViewPrediction}
               style={styles.predictionCard}
@@ -222,10 +222,13 @@ export default function HomeScreen() {
                   <View style={styles.statusContainer}>
                     <View style={[
                       styles.statusDot,
-                      currentPrediction.status === 'ACTIVE' ? styles.statusDotActive : styles.statusDotJudging
+                      currentPrediction.status === 'active' ? styles.statusDotActive : styles.statusDotJudging
                     ]} />
                     <Text style={styles.statusText}>
-                      {currentPrediction.status === 'ACTIVE' ? 'Active Prediction' : 'Awaiting Judgment'}
+                      {currentPrediction.status === 'active' 
+                        ? (isChina ? '进行中' : 'Active Prediction')
+                        : (isChina ? '评审中' : 'Awaiting Judgment')
+                      }
                     </Text>
                   </View>
                   <Ionicons name="chevron-forward" size={20} color="#64748b" />
@@ -236,10 +239,51 @@ export default function HomeScreen() {
                   {currentPrediction.title}
                 </Text>
 
-                {currentPrediction.description && (
-                  <Text style={styles.predictionDesc} numberOfLines={2}>
-                    {currentPrediction.description}
-                  </Text>
+                {/* 打卡进度条 */}
+                {checkinProgress && (
+                  <View style={styles.progressSection}>
+                    <View style={styles.progressHeader}>
+                      <Text style={styles.progressLabel}>
+                        {isChina ? '打卡进度' : 'Checkin Progress'}
+                      </Text>
+                      <Text style={styles.progressValue}>
+                        {checkinProgress.completed}/{checkinProgress.total}
+                      </Text>
+                    </View>
+                    <View style={styles.progressBar}>
+                      <View 
+                        style={[
+                          styles.progressFill, 
+                          { width: `${(checkinProgress.completed / checkinProgress.total) * 100}%` }
+                        ]} 
+                      />
+                      <View 
+                        style={[
+                          styles.progressMissed, 
+                          { 
+                            width: `${(checkinProgress.missed / checkinProgress.total) * 100}%`,
+                            left: `${(checkinProgress.completed / checkinProgress.total) * 100}%`
+                          }
+                        ]} 
+                      />
+                    </View>
+                    <View style={styles.progressStats}>
+                      <View style={styles.progressStatItem}>
+                        <View style={[styles.progressStatDot, { backgroundColor: '#10b981' }]} />
+                        <Text style={styles.progressStatText}>
+                          {isChina ? `已获得 ${checkinProgress.earnedReward}` : `Earned ${checkinProgress.earnedReward}`}
+                        </Text>
+                      </View>
+                      {checkinProgress.missed > 0 && (
+                        <View style={styles.progressStatItem}>
+                          <View style={[styles.progressStatDot, { backgroundColor: '#ef4444' }]} />
+                          <Text style={styles.progressStatText}>
+                            {isChina ? `已损失 ${checkinProgress.lostReward}` : `Lost ${checkinProgress.lostReward}`}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
                 )}
 
                 {/* Stats Row */}
@@ -249,7 +293,9 @@ export default function HomeScreen() {
                       <Ionicons name="time-outline" size={16} color="#64748b" />
                     </View>
                     <View>
-                      <Text style={styles.statLabel}>Time Left</Text>
+                      <Text style={styles.statLabel}>
+                        {isChina ? '剩余' : 'Time Left'}
+                      </Text>
                       <Text style={[
                         styles.statValue,
                         countdown.isExpired && styles.statValueExpired
@@ -264,9 +310,11 @@ export default function HomeScreen() {
                       <Ionicons name="diamond-outline" size={16} color="#c084fc" />
                     </View>
                     <View>
-                      <Text style={styles.statLabel}>Stake</Text>
+                      <Text style={styles.statLabel}>
+                        {isChina ? '押注' : 'Stake'}
+                      </Text>
                       <Text style={styles.statValuePurple}>
-                        {formatCredits(currentPrediction.stake)}
+                        {currentPrediction.total_stake}
                       </Text>
                     </View>
                   </View>
@@ -289,21 +337,21 @@ export default function HomeScreen() {
                   </LinearGradient>
                 </View>
                 <Text style={styles.emptyTitle}>
-                  {isInRecovery ? 'Continue Your Recovery' : 'No Active Prediction'}
+                  {isChina ? '没有进行中的预测' : 'No Active Prediction'}
                 </Text>
                 <Text style={styles.emptyDesc}>
-                  {isInRecovery
-                    ? 'Create a new prediction to continue your recovery progress'
-                    : 'Create a prediction and stake your commitment'}
+                  {isChina
+                    ? '创建一个预测，用打卡点追踪你的进度'
+                    : 'Create a prediction and track your progress with checkpoints'}
                 </Text>
                 <TouchableOpacity
                   onPress={handleCreatePrediction}
-                  disabled={!canCreatePrediction && !isInRecovery}
+                  disabled={!canCreatePrediction}
                   style={styles.createButton}
                   activeOpacity={0.85}
                 >
                   <LinearGradient
-                    colors={canCreatePrediction || isInRecovery
+                    colors={canCreatePrediction
                       ? ['#c084fc', '#a855f7', '#9333ea']
                       : ['#52525b', '#3f3f46', '#27272a']
                     }
@@ -312,7 +360,9 @@ export default function HomeScreen() {
                     style={styles.createButtonGradient}
                   >
                     <Ionicons name="add" size={20} color="#fff" style={{ marginRight: 8 }} />
-                    <Text style={styles.createButtonText}>Create Prediction</Text>
+                    <Text style={styles.createButtonText}>
+                      {isChina ? '创建预测' : 'Create Prediction'}
+                    </Text>
                   </LinearGradient>
                 </TouchableOpacity>
               </LinearGradient>
@@ -321,7 +371,9 @@ export default function HomeScreen() {
 
           {/* Quick Tips Section */}
           <View style={styles.tipsSection}>
-            <Text style={styles.tipsTitle}>Quick Tips</Text>
+            <Text style={styles.tipsTitle}>
+              {isChina ? '使用指南' : 'Quick Tips'}
+            </Text>
             <View style={styles.tipCard}>
               <LinearGradient
                 colors={['rgba(255, 255, 255, 0.03)', 'rgba(255, 255, 255, 0.01)']}
@@ -331,7 +383,9 @@ export default function HomeScreen() {
                   <Text style={styles.tipIcon}>💡</Text>
                 </View>
                 <Text style={styles.tipText}>
-                  Start with small stakes to build your streak. Consistency is key!
+                  {isChina 
+                    ? '打卡越早，奖励越高！前期打卡点的奖励大于后期，错过即损失。'
+                    : 'Early checkpoints have higher rewards! Missing a checkpoint = losing its reward.'}
                 </Text>
               </LinearGradient>
             </View>
@@ -341,6 +395,9 @@ export default function HomeScreen() {
     </View>
   );
 }
+
+// 导入 React
+import React from 'react';
 
 const styles = StyleSheet.create({
   container: {
@@ -420,11 +477,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: 'rgba(168, 85, 247, 0.3)',
-  },
-  avatarText: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#c084fc',
   },
 
   // Balance Card
@@ -531,120 +583,53 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // Streak Card
-  streakCard: {
+  // Today Checkin Banner
+  todayCheckinBanner: {
     marginHorizontal: 24,
     marginBottom: 16,
     borderRadius: 20,
     overflow: 'hidden',
   },
-  streakGradient: {
+  todayCheckinGradient: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 18,
+    padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(16, 185, 129, 0.3)',
     borderRadius: 20,
   },
-  streakIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
-  streakIcon: {
-    fontSize: 24,
-  },
-  streakContent: {
-    flex: 1,
-  },
-  streakLabel: {
-    fontSize: 13,
-    color: '#64748b',
-    fontWeight: '500',
-  },
-  streakValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#f8fafc',
-    marginTop: 2,
-  },
-  streakBadge: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  streakBadgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#fbbf24',
-  } as const,
-
-  // Recovery Banner
-  recoveryBanner: {
-    marginHorizontal: 24,
-    marginBottom: 16,
-    borderRadius: 20,
-    overflow: 'hidden',
-  },
-  recoveryGradient: {
-    padding: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-    borderRadius: 20,
-  },
-  recoveryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  recoveryIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+  todayCheckinIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
-  recoveryTitleContainer: {
+  todayCheckinContent: {
     flex: 1,
   },
-  recoveryTitle: {
-    fontSize: 16,
+  todayCheckinTitle: {
+    fontSize: 15,
     fontWeight: '600',
-    color: '#fbbf24',
+    color: '#34d399',
   },
-  recoverySubtitle: {
+  todayCheckinSubtitle: {
     fontSize: 13,
     color: '#94a3b8',
     marginTop: 2,
   },
-  recoveryProgress: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  recoveryDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  recoveryDotActive: {
+  todayCheckinButton: {
     backgroundColor: '#10b981',
-    borderColor: '#10b981',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 12,
   },
-  recoveryLine: {
-    flex: 1,
-    height: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    marginHorizontal: 8,
+  todayCheckinButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 
   // Prediction Card
@@ -691,15 +676,75 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     color: '#f8fafc',
-    marginBottom: 8,
+    marginBottom: 16,
     letterSpacing: -0.3,
   },
-  predictionDesc: {
-    fontSize: 14,
-    color: '#64748b',
-    marginBottom: 20,
-    lineHeight: 20,
+
+  // Progress Section
+  progressSection: {
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
   },
+  progressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  progressLabel: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+  progressValue: {
+    fontSize: 13,
+    color: '#a855f7',
+    fontWeight: '600',
+  },
+  progressBar: {
+    height: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 4,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  progressFill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    height: '100%',
+    backgroundColor: '#10b981',
+    borderRadius: 4,
+  },
+  progressMissed: {
+    position: 'absolute',
+    top: 0,
+    height: '100%',
+    backgroundColor: '#ef4444',
+    borderRadius: 4,
+  },
+  progressStats: {
+    flexDirection: 'row',
+    marginTop: 10,
+    gap: 16,
+  },
+  progressStatItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  progressStatDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  progressStatText: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+
+  // Stats Row
   predictionStats: {
     flexDirection: 'row',
     alignItems: 'center',

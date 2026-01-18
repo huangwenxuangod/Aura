@@ -1,30 +1,24 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
-import type { User, Prediction, Recovery } from '@/types';
+import type { User } from '@/types';
 
 interface UserState {
   // State
   user: User | null;
-  currentPrediction: Prediction | null;
-  recovery: Recovery | null;
   isLoading: boolean;
   isInitialized: boolean;
 
   // Actions
   initialize: () => Promise<void>;
   fetchUser: () => Promise<void>;
-  fetchCurrentPrediction: () => Promise<void>;
-  fetchRecovery: () => Promise<void>;
   setUser: (user: User | null) => void;
-  updateCreditBalance: (balance: number) => void;
+  updateCredits: (credits: number) => void;
   reset: () => void;
 }
 
 export const useUserStore = create<UserState>((set, get) => ({
   // Initial State
   user: null,
-  currentPrediction: null,
-  recovery: null,
   isLoading: false,
   isInitialized: false,
 
@@ -36,15 +30,13 @@ export const useUserStore = create<UserState>((set, get) => ({
     set({ isLoading: true });
     try {
       await get().fetchUser();
-      await get().fetchCurrentPrediction();
-      await get().fetchRecovery();
       set({ isInitialized: true });
     } finally {
       set({ isLoading: false });
     }
   },
 
-  // 获取用户信息
+  // 获取用户信息（如果不存在则自动创建）
   fetchUser: async () => {
     const { data: { user: authUser } } = await supabase.auth.getUser();
     if (!authUser) {
@@ -52,87 +44,63 @@ export const useUserStore = create<UserState>((set, get) => ({
       return;
     }
 
+    // 使用 maybeSingle 避免空结果报错
     const { data, error } = await supabase
-      .from('users')
+      .from('user_profiles')
       .select('*')
       .eq('id', authUser.id)
-      .single();
+      .maybeSingle();
 
     if (error) {
       console.error('Failed to fetch user:', error);
+      set({ user: null });
+      return;
+    }
+
+    // 如果用户 profile 不存在，自动创建
+    if (!data) {
+      const newUser = {
+        id: authUser.id,
+        email: authUser.email || null,
+        display_name: authUser.user_metadata?.name || 
+                      authUser.email?.split('@')[0] || 
+                      `User_${authUser.id.substring(0, 8)}`,
+        avatar_url: authUser.user_metadata?.avatar_url || null,
+        credits: 1000, // 默认积分
+      };
+
+      const { data: createdUser, error: createError } = await supabase
+        .from('user_profiles')
+        .insert(newUser)
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Failed to create user profile:', createError);
+        set({ user: null });
+        return;
+      }
+
+      set({ user: createdUser as User });
       return;
     }
 
     set({ user: data as User });
   },
 
-  // 获取当前预测
-  fetchCurrentPrediction: async () => {
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) {
-      set({ currentPrediction: null });
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from('predictions')
-      .select('*')
-      .eq('user_id', authUser.id)
-      .in('status', ['ACTIVE', 'JUDGING'])
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Failed to fetch current prediction:', error);
-      set({ currentPrediction: null });
-      return;
-    }
-
-    set({ currentPrediction: data as Prediction | null });
-  },
-
-  // 获取恢复状态
-  fetchRecovery: async () => {
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (!authUser) {
-      set({ recovery: null });
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from('recoveries')
-      .select('*')
-      .eq('user_id', authUser.id)
-      .eq('status', 'IN_PROGRESS')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Failed to fetch recovery:', error);
-      set({ recovery: null });
-      return;
-    }
-
-    set({ recovery: data as Recovery | null });
-  },
-
   // 设置用户
   setUser: (user) => set({ user }),
 
-  // 更新余额
-  updateCreditBalance: (balance) => {
+  // 更新积分
+  updateCredits: (credits) => {
     const { user } = get();
     if (!user) return;
-    set({ user: { ...user, credit_balance: balance } });
+    set({ user: { ...user, credits } });
   },
 
   // 重置状态
   reset: () => set({
     user: null,
-    currentPrediction: null,
-    recovery: null,
     isLoading: false,
     isInitialized: false,
   }),

@@ -46,7 +46,26 @@ interface CachedRegion {
 }
 
 /**
- * 通过 IP 检测用户区域
+ * 带超时的 fetch
+ */
+async function fetchWithTimeout(url: string, timeout = 5000): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * 通过 IP 检测用户区域（静默失败，不打印错误）
  */
 export async function detectRegion(): Promise<Region> {
   try {
@@ -56,18 +75,31 @@ export async function detectRegion(): Promise<Region> {
       return cached;
     }
 
-    // 调用 IP 检测 API
-    const response = await fetch('https://ipapi.co/json/', {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-    });
+    let countryCode: string | null = null;
 
-    if (!response.ok) {
-      throw new Error('IP detection failed');
+    // 尝试主 API
+    try {
+      const response = await fetchWithTimeout('https://ipapi.co/json/', 3000);
+      if (response.ok) {
+        const data = await response.json();
+        countryCode = data.country_code;
+      }
+    } catch {
+      // 静默失败，尝试备用 API
     }
 
-    const data = await response.json();
-    const countryCode = data.country_code;
+    // 备用 API
+    if (!countryCode) {
+      try {
+        const response = await fetchWithTimeout('http://ip-api.com/json/', 3000);
+        if (response.ok) {
+          const data = await response.json();
+          countryCode = data.countryCode;
+        }
+      } catch {
+        // 静默失败
+      }
+    }
 
     // 判断是否为中国
     const region: Region = countryCode === 'CN' ? 'CN' : 'INTL';
@@ -76,9 +108,8 @@ export async function detectRegion(): Promise<Region> {
     await cacheRegion(region);
 
     return region;
-  } catch (error) {
-    console.error('Region detection error:', error);
-    // 默认返回国际版
+  } catch {
+    // 默认返回国际版（静默）
     return 'INTL';
   }
 }

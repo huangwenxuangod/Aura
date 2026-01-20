@@ -155,7 +155,7 @@ export default function CreatePredictionScreen() {
         text2: `已押注 ${stake} 积分，${checkinPointCount} 个打卡点`,
       });
 
-      router.replace(`/(screens)/prediction/${prediction.id}`);
+      router.replace('/(tabs)/index');
     } catch (error: any) {
       Toast.show({
         type: 'error',
